@@ -100,7 +100,7 @@ def fetch_core_earnings(terminal_ui):
         resp = requests.post(url, json=payload)
         if resp.status_code == 200:
             data = resp.json().get('data', [])
-            terminal_ui.code(f"[*] TradingView'dan {len(data)} büyük hisse alındı.\n[*] Finnhub üzerinden her hisse için NLP Haber Analizi başlatılıyor...\n", language="bash")
+            terminal_ui.code(f"[*] TradingView'dan {len(data)} büyük hisse alındı.\n[*] NLP ve Bilanço Öncesi Hacim Anomalisi analizleri başlatılıyor...\n", language="bash")
             
             parsed = []
             start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
@@ -114,21 +114,43 @@ def fetch_core_earnings(terminal_ui):
                 m_cap_str = f"${mcap/1e9:.2f}B" if mcap >= 1e9 else (f"${mcap/1e6:.2f}M" if mcap >= 1e6 else f"${mcap:.2f}")
                 target_str = f"${target_mean:.2f}" if target_mean else "Belirsiz"
                 
+                # Haber Çekimi ve NLP
                 news_count = 0
                 signal_str = "NÖTR ⚖️"
-                
                 try:
                     news_url = f"https://finnhub.io/api/v1/company-news?symbol={sym}&from={start_date}&to={end_date}&token={FINNHUB_API_KEY}"
                     news_data = requests.get(news_url).json()
-                    
                     if news_data and isinstance(news_data, list):
                         news_count = len(news_data)
                         st.session_state.core_news_cache[sym] = news_data[:5] 
-                        
                         if news_count > 0:
                             latest_score = analyzer.polarity_scores(news_data[0]['headline'])['compound']
                             if latest_score >= 0.15: signal_str = "AL 🚀"
                             elif latest_score <= -0.15: signal_str = "SAT ⚠️"
+                except:
+                    pass
+
+                # Bilanço Öncesi Hacim Anomalisi Algoritması
+                anomaly_str = "Veri Yok"
+                try:
+                    hist = yf.Ticker(sym).history(period="45d", progress=False)
+                    if not hist.empty and len(hist) >= 30:
+                        vol_10d = hist['Volume'].iloc[-10:].mean()
+                        vol_30d_prev = hist['Volume'].iloc[-40:-10].mean() # Son 10 gün öncesindeki 30 günün ortalaması
+                        price_10d_ago = hist['Close'].iloc[-10]
+                        price_now = hist['Close'].iloc[-1]
+                        price_change = ((price_now - price_10d_ago) / price_10d_ago) * 100
+                        
+                        if vol_30d_prev > 0:
+                            vol_ratio = vol_10d / vol_30d_prev
+                            if vol_ratio > 1.5 and -3 <= price_change <= 5:
+                                anomaly_str = f"🟢 Gizli Toplama ({vol_ratio:.1f}x Hacim)"
+                            elif vol_ratio > 1.5 and price_change > 5:
+                                anomaly_str = f"⚠️ Fiyatlanmış Ralli (+%{price_change:.1f})"
+                            elif vol_ratio < 0.8:
+                                anomaly_str = "⚪ İlgi Düşük"
+                            else:
+                                anomaly_str = "Standart"
                 except:
                     pass
                 
@@ -140,11 +162,11 @@ def fetch_core_earnings(terminal_ui):
                     "Analist Hedefi": target_str,
                     "Tarih": time.strftime('%d-%m-%Y', time.localtime(date_ts)), 
                     "Haber Adedi": news_count,
-                    "Son Haber Sinyali": signal_str,
-                    "Detaylar": "Aşağıdan Seçin 👇"
+                    "NLP Sinyali": signal_str,
+                    "Hacim Anomalisi": anomaly_str
                 })
                 
-                terminal_ui.code(f"   [{i+1}/{len(data)}] {sym} analiz edildi. Haber: {news_count} | Sinyal: {signal_str}", language="bash")
+                terminal_ui.code(f"   [{i+1}/{len(data)}] {sym} -> Haber: {news_count} | Anomali: {anomaly_str}", language="bash")
                 
             terminal_ui.code(f"\n[+] İşlem Başarılı!\n", language="bash")
             return pd.DataFrame(parsed)
@@ -518,11 +540,9 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📰 Makro Haber & NLP"
 ])
 
-# --- SEKME 1: ÇEKİRDEK (ORİJİNAL DÜZENE DÖNDÜ, ANALİST/HABER EKLENDİ) ---
+# --- SEKME 1: ÇEKİRDEK KAZANÇ TAKVİMİ ---
 with tab1:
-    st.markdown("##### 🎯 Kazanç Takvimi ve Derin Analiz")
-    st.caption("Orijinal amacına uygun olarak bilançosu yaklaşan şirketleri listeler. Seçilen hisse üzerinde Derin Analiz (Analist Konsensüsü ve NLP Haber Analizi) gerçekleştirir.")
-    
+    st.markdown("##### 🎯 Analist Destekli Kazanç Takvimi ve Haber Analizi")
     if st.button("Verileri Çek / Güncelle (Tab-1)"):
         term_ui1 = st.empty()
         st.session_state.core_df = fetch_core_earnings(term_ui1)
@@ -530,15 +550,15 @@ with tab1:
     if "core_df" in st.session_state and not st.session_state.core_df.empty:
         df_core = st.session_state.core_df
         c1, c2, c3 = st.columns(3)
-        c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
+        c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse (Top 25)</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
         avg_eps = pd.to_numeric(df_core["Est. EPS"], errors='coerce').mean()
         c2.markdown(f"<div class='quant-card'><div class='quant-card-title'>Ortalama Est. EPS</div><div class='quant-card-value'>${avg_eps:.2f}</div></div>", unsafe_allow_html=True)
         c3.markdown(f"<div class='quant-card'><div class='quant-card-title'>Tarih Aralığı</div><div class='quant-card-value'>Gelecek 30 Gün</div></div>", unsafe_allow_html=True)
         
-        st.dataframe(df_core.drop(columns=["Raw_Cap"]), use_container_width=True, hide_index=True)
+        st.dataframe(df_core, use_container_width=True, hide_index=True)
         
         st.write("---")
-        st.markdown("### 🐋 Finnhub Derin Analiz (Analist Konsensüsü & NLP Haber)")
+        st.markdown("##### 🐋 Finnhub Derin Analiz (Analist Konsensüsü & NLP Haber)")
         
         selected_ticker = st.selectbox("Detaylı analiz edilecek hisseyi seçin:", df_core["Hisse"].tolist())
         
@@ -574,33 +594,25 @@ with tab1:
             
             with col_right:
                 st.markdown("#### 📰 Şirket Haberleri ve Duygu Skoru (Son 1 Hafta)")
-                analyzer = get_nlp_engine()
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=7)
-                url = f"https://finnhub.io/api/v1/company-news?symbol={selected_ticker}&from={start_date.strftime('%Y-%m-%d')}&to={end_date.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}"
-                
-                try:
-                    news_res = requests.get(url).json()
-                    if news_res and isinstance(news_res, list):
-                        for item in news_res[:5]: # Son 5 haber
-                            score = analyzer.polarity_scores(item['headline'])['compound']
-                            if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>AL ({score:.2f})</span>"
-                            elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>SAT ({score:.2f})</span>"
-                            else: sentiment_ui = f"<span class='badge-neutral'>NÖTR ({score:.2f})</span>"
-                            
-                            st.markdown(f"""
-                            <div class='quant-card' style='padding: 10px; margin-bottom: 8px;'>
-                                <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
-                                    <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 0.9rem;'>{item['headline']}</a>
-                                    {sentiment_ui}
-                                </div>
-                                <div style='font-size: 0.7rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
+                if selected_ticker in st.session_state.core_news_cache and st.session_state.core_news_cache[selected_ticker]:
+                    analyzer = get_nlp_engine()
+                    for item in st.session_state.core_news_cache[selected_ticker]:
+                        score = analyzer.polarity_scores(item['headline'])['compound']
+                        if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>AL ({score:.2f})</span>"
+                        elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>SAT ({score:.2f})</span>"
+                        else: sentiment_ui = f"<span class='badge-neutral'>NÖTR ({score:.2f})</span>"
+                        
+                        st.markdown(f"""
+                        <div class='quant-card' style='padding: 10px; margin-bottom: 8px;'>
+                            <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
+                                <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 0.9rem;'>{item['headline']}</a>
+                                {sentiment_ui}
                             </div>
-                            """, unsafe_allow_html=True)
-                    else:
-                        st.info("Son 7 güne ait haber bulunamadı.")
-                except:
-                    st.error("Veri akışı sağlanamadı.")
+                            <div style='font-size: 0.7rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.info("Bu hisse için son 7 güne ait haber bulunamadı.")
 
 # --- SEKME 2: KURUMSAL TARAYICI ---
 with tab2:
