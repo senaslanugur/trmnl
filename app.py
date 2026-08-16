@@ -57,7 +57,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- GLOBAL AYARLAR VE NLP ---
-FINNHUB_API_KEY = "c94i99aad3if4j50rvn0" #[cite: 1]
+FINNHUB_API_KEY = "c94i99aad3if4j50rvn0"
 
 @st.cache_resource
 def get_nlp_analyzer():
@@ -69,7 +69,7 @@ def get_nlp_analyzer():
         'underperform': -3.5, 'warning': -3.0, 'loss': -3.5, 'drop': -3.0,
         'crash': -4.0, 'bankruptcy': -5.0, 'shatter': 3.0
     }
-    analyzer.lexicon.update(FINANCIAL_LEXICON) #[cite: 2]
+    analyzer.lexicon.update(FINANCIAL_LEXICON)
     return analyzer
 
 # --- TAB-1 İZOLASYON ALANI: ÇEKİRDEK VERİ FONKSİYONLARI ---
@@ -89,7 +89,7 @@ def fetch_upcoming_earnings():
         "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic"],
         "sort": {"sortBy": "earnings_release_next_date", "sortOrder": "asc"},
         "range": [0, 500] 
-    } #[cite: 1, 3]
+    }
 
     try:
         response = requests.post(url, json=payload)
@@ -130,17 +130,18 @@ def fetch_upcoming_earnings():
         st.error(f"TradingView API Hatası: {e}")
         return pd.DataFrame()
 
-# --- YENİ ALTYAPI: 5000 HİSSELİK BULK VERİ ÇEKİMİ ---
+# --- DÜZELTİLMİŞ ALTYAPI: 5000 HİSSELİK BULK VERİ ÇEKİMİ ---
 @st.cache_data(ttl=1800)
 def fetch_general_screener(limit=5000):
     url = "https://scanner.tradingview.com/america/scan"
     payload = {
-        "filter": [{"left": "type", "operation": "in_range", "right": ["stock", "dr"]}], #[cite: 4]
+        "filter": [{"left": "type", "operation": "in_range", "right": ["stock", "dr"]}],
         "options": {"lang": "en"},
         "markets": ["america"],
+        # Tam olarak 8 kolon isteniyor
         "columns": ["name", "close", "price_52_week_low", "price_52_week_high", "Recommend.All", "market_cap_basic", "price_target_price_mean", "volume"],
-        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"}, #[cite: 4]
-        "range": [0, limit] #[cite: 4]
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+        "range": [0, limit]
     }
 
     try:
@@ -151,7 +152,16 @@ def fetch_general_screener(limit=5000):
             for item in data:
                 sym = item['s'].split(':')[-1]
                 d = item['d']
-                close, low52, high52, rec, mcap, target_mean, vol = d[0:7]
+                
+                # Doğru değişken eşleştirmesi (Array Indexing düzeltildi)
+                name = d[0]
+                close = d[1]
+                low52 = d[2]
+                high52 = d[3]
+                rec = d[4]
+                mcap = d[5]
+                target_mean = d[6]
+                vol = d[7] if len(d) > 7 else 0
                 
                 dip_farki = ((close - low52) / low52) * 100 if close and low52 and low52 > 0 else 0
                 target_pot = ((target_mean - close) / close) * 100 if target_mean and close and close > 0 else 0
@@ -175,15 +185,17 @@ def fetch_general_screener(limit=5000):
                 })
             return pd.DataFrame(parsed)
         return pd.DataFrame()
-    except Exception:
+    except Exception as e:
+        # Hata ayıklamayı kolaylaştırmak için loglanabilir
+        print(f"Genel Tarayıcı Hatası: {e}")
         return pd.DataFrame()
 
 def fetch_finnhub_analysis(ticker):
     try:
-        quote = requests.get(f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}").json() #[cite: 1]
-        metric = requests.get(f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={FINNHUB_API_KEY}").json().get('metric', {}) #[cite: 1]
-        recs = requests.get(f"https://finnhub.io/api/v1/stock/recommendation?symbol={ticker}&token={FINNHUB_API_KEY}").json() #[cite: 1]
-        insider = requests.get(f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={ticker}&token={FINNHUB_API_KEY}").json().get('data', []) #[cite: 1]
+        quote = requests.get(f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}").json()
+        metric = requests.get(f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={FINNHUB_API_KEY}").json().get('metric', {})
+        recs = requests.get(f"https://finnhub.io/api/v1/stock/recommendation?symbol={ticker}&token={FINNHUB_API_KEY}").json()
+        insider = requests.get(f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={ticker}&token={FINNHUB_API_KEY}").json().get('data', [])
 
         curr_price = quote.get('c', 0)
         low_52 = metric.get('52WeekLow', 0)
@@ -299,7 +311,7 @@ with tab3:
             now = datetime.now()
             past_week = now - timedelta(days=7)
             
-            news_url = f"https://finnhub.io/api/v1/company-news?symbol={news_ticker}&from={past_week.strftime('%Y-%m-%d')}&to={now.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}" #[cite: 2]
+            news_url = f"https://finnhub.io/api/v1/company-news?symbol={news_ticker}&from={past_week.strftime('%Y-%m-%d')}&to={now.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}"
             try:
                 news_data = requests.get(news_url).json()
                 if news_data:
@@ -316,7 +328,7 @@ with tab3:
 with tab4:
     st.markdown("### 🌍 Genel Piyasa Radarı (Market Cap'e Göre En Büyük 5000 Hisse)")
     with st.spinner("Piyasadaki en büyük 5000 hisse TradingView üzerinden anlık taranıyor..."):
-        df_general = fetch_general_screener(limit=5000) #[cite: 4]
+        df_general = fetch_general_screener(limit=5000)
         
     if not df_general.empty:
         filter_option = st.radio("Taramayı Filtrele:", ("Tümünü Göster", "🔥 52W Dibe En Yakın Olanlar (Potansiyel Dip)", "🚀 Katı Sinyal: GÜÇLÜ AL Verenler"), horizontal=True)
@@ -332,7 +344,8 @@ with tab4:
         df_filtered["Hedef Potansiyeli (%)"] = df_filtered["Hedef Potansiyeli (%)"].apply(lambda x: f"%{x:.2f}")
         
         st.dataframe(df_filtered.drop(columns=["TV_Rec"]), use_container_width=True, hide_index=True)
-
+    else:
+        st.error("Veriler çekilemedi. API format değişikliği veya limit kısıtlaması yaşanmış olabilir.")
 
 # --- TAB 5: AKILLI RADARLAR (5000 HİSSE & YAHOO FINANCE DESTEKLİ) ---
 with tab5:
@@ -341,7 +354,7 @@ with tab5:
     
     col_pool, col_radar = st.columns([1, 2])
     with col_pool:
-        pool_limit = st.selectbox("Taranacak Havuz Büyüklüğü (Market Cap):", [1000, 3000, 5000], index=2) #[cite: 4]
+        pool_limit = st.selectbox("Taranacak Havuz Büyüklüğü (Market Cap):", [1000, 3000, 5000], index=2)
     with col_radar:
         scan_type = st.radio("Radar Stratejisi Seçin:", [
             "📉 52W Dip Radarı (Dipten <= %15)", 
@@ -356,7 +369,7 @@ with tab5:
         
         # 5000 hisselik bulk (toplu) veri tek seferde çekilir
         status_text.text(f"TradingView'dan {pool_limit} hisselik bulk veriler indiriliyor...")
-        tv_data = fetch_general_screener(limit=pool_limit) #[cite: 4]
+        tv_data = fetch_general_screener(limit=pool_limit)
         
         results = []
         
@@ -414,4 +427,4 @@ with tab5:
                 st.info("Kriterlere uyan hisse bulunamadı.")
         else:
             status_text.empty()
-            st.error("Veriler çekilemedi.")
+            st.error("Veriler çekilemedi. API format değişikliği veya limit kısıtlaması yaşanmış olabilir.")
