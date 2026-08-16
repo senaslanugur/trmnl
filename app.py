@@ -21,6 +21,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Tab-1 Çekirdek Haber Hafızası
+if "core_news_cache" not in st.session_state:
+    st.session_state.core_news_cache = {}
+
 # Tab-2 Kurumsal Tarayıcı Hafızası
 if "tab2_scanned" not in st.session_state:
     st.session_state.tab2_scanned = False
@@ -72,9 +76,9 @@ def get_nlp_engine():
     return analyzer
 
 def fetch_core_earnings(terminal_ui):
-    terminal_ui.code("[*] TradingView Kazanç Takvimi API'sine bağlanılıyor...\n", language="bash")
+    terminal_ui.code("[*] TradingView Kazanç Takvimi ve Hedef Fiyat API'sine bağlanılıyor...\n", language="bash")
     time.sleep(0.5)
-    url = "https://scanner.tradingview.com/america/scan?label-product=calendar-earnings"
+    url = "https://scanner.tradingview.com/america/scan"
     now = int(time.time())
     one_month_later = now + (30 * 24 * 60 * 60)
     
@@ -84,37 +88,65 @@ def fetch_core_earnings(terminal_ui):
             {"left": "earnings_per_share_forecast_next_fq", "operation": "greater", "right": 0}
         ],
         "markets": ["america"],
-        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic"],
-        "sort": {"sortBy": "earnings_release_next_date", "sortOrder": "asc"},
-        "range": [0, 5000] 
+        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic", "close", "price_target_price_mean"],
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+        "range": [0, 25]
     }
+    
+    analyzer = get_nlp_engine()
+    st.session_state.core_news_cache = {}
     
     try:
         resp = requests.post(url, json=payload)
-        terminal_ui.code(f"[*] Sunucu Yanıtı: {resp.status_code}\n[*] Veriler işleniyor...\n", language="bash")
         if resp.status_code == 200:
             data = resp.json().get('data', [])
-            def sort_key(x):
-                d = x['d']
-                ts = d[2]
-                day_timestamp = ts - (ts % 86400)
-                m_cap = d[3] if d[3] is not None else 0
-                return (day_timestamp, -m_cap)
-            data.sort(key=sort_key)
+            terminal_ui.code(f"[*] TradingView'dan {len(data)} büyük hisse alındı.\n[*] Finnhub üzerinden her hisse için NLP Haber Analizi başlatılıyor...\n", language="bash")
             
             parsed = []
-            for item in data:
+            start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            
+            for i, item in enumerate(data):
+                sym = item['s'].split(':')[-1]
                 d = item['d']
-                val = d[3] or 0
-                m_cap_str = f"${val/1e9:.2f}B" if val >= 1e9 else (f"${val/1e6:.2f}M" if val >= 1e6 else f"${val:.2f}")
+                eps, date_ts, mcap, close, target_mean = d[1], d[2], d[3] or 0, d[4], d[5]
+                
+                m_cap_str = f"${mcap/1e9:.2f}B" if mcap >= 1e9 else (f"${mcap/1e6:.2f}M" if mcap >= 1e6 else f"${mcap:.2f}")
+                target_str = f"${target_mean:.2f}" if target_mean else "Belirsiz"
+                
+                news_count = 0
+                signal_str = "NÖTR ⚖️"
+                
+                try:
+                    news_url = f"https://finnhub.io/api/v1/company-news?symbol={sym}&from={start_date}&to={end_date}&token={FINNHUB_API_KEY}"
+                    news_data = requests.get(news_url).json()
+                    
+                    if news_data and isinstance(news_data, list):
+                        news_count = len(news_data)
+                        st.session_state.core_news_cache[sym] = news_data[:5] 
+                        
+                        if news_count > 0:
+                            latest_score = analyzer.polarity_scores(news_data[0]['headline'])['compound']
+                            if latest_score >= 0.15: signal_str = "AL 🚀"
+                            elif latest_score <= -0.15: signal_str = "SAT ⚠️"
+                except:
+                    pass
+                
                 parsed.append({
-                    "Hisse": item['s'].split(':')[-1], 
-                    "Est. EPS": d[1], 
-                    "Tarih": time.strftime('%Y-%m-%d', time.localtime(d[2])), 
+                    "Hisse": sym, 
+                    "Fiyat": f"${close:.2f}",
+                    "Est. EPS": eps,
                     "Market Cap": m_cap_str,
-                    "Raw_Cap": val
+                    "Analist Hedefi": target_str,
+                    "Tarih": time.strftime('%d-%m-%Y', time.localtime(date_ts)), 
+                    "Haber Adedi": news_count,
+                    "Son Haber Sinyali": signal_str,
+                    "Detaylar": "Aşağıdan Seçin 👇"
                 })
-            terminal_ui.code(f"[+] İşlem Başarılı! {len(parsed)} hisse bulundu.\n", language="bash")
+                
+                terminal_ui.code(f"   [{i+1}/{len(data)}] {sym} analiz edildi. Haber: {news_count} | Sinyal: {signal_str}", language="bash")
+                
+            terminal_ui.code(f"\n[+] İşlem Başarılı!\n", language="bash")
             return pd.DataFrame(parsed)
     except Exception as e: 
         terminal_ui.code(f"[!] HATA OLUŞTU: {e}\n", language="bash")
@@ -534,14 +566,14 @@ with tab1:
             
             col_left, col_right = st.columns([1, 1])
             with col_left:
-                st.markdown("#### 🏦 Hangi Analistler? (Son Kurum Raporları)")[cite: 5]
+                st.markdown("#### 🏦 Hangi Analistler? (Son Kurum Raporları)")
                 if not analyst_df.empty:
                     st.dataframe(analyst_df, use_container_width=True, hide_index=True)
                 else:
                     st.info("Kurum raporu bulunamadı.")
             
             with col_right:
-                st.markdown("#### 📰 Şirket Haberleri ve Duygu Skoru (Son 1 Hafta)")[cite: 2]
+                st.markdown("#### 📰 Şirket Haberleri ve Duygu Skoru (Son 1 Hafta)")
                 analyzer = get_nlp_engine()
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=7)
