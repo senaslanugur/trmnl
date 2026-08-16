@@ -78,7 +78,7 @@ def get_nlp_engine():
 def fetch_core_earnings(terminal_ui):
     terminal_ui.code("[*] TradingView Kazanç Takvimi API'sine bağlanılıyor...\n", language="bash")
     time.sleep(0.5)
-    url = "https://scanner.tradingview.com/america/scan?label-product=calendar-earnings"
+    url = "https://scanner.tradingview.com/america/scan"
     now = int(time.time())
     one_month_later = now + (30 * 24 * 60 * 60)
     
@@ -88,17 +88,17 @@ def fetch_core_earnings(terminal_ui):
             {"left": "earnings_per_share_forecast_next_fq", "operation": "greater", "right": 0}
         ],
         "markets": ["america"],
-        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic"],
+        # Analist hedefini arka planda çekiyoruz
+        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic", "price_target_price_mean"],
         "sort": {"sortBy": "earnings_release_next_date", "sortOrder": "asc"},
         "range": [0, 5000] 
     }
     
     try:
         resp = requests.post(url, json=payload)
+        terminal_ui.code(f"[*] Sunucu Yanıtı: {resp.status_code}\n[*] Veriler işleniyor...\n", language="bash")
         if resp.status_code == 200:
             data = resp.json().get('data', [])
-            terminal_ui.code(f"[*] TradingView'dan {len(data)} hisse alındı.\n[*] Orijinal sıralama algoritması uygulanıyor...\n", language="bash")
-            
             def sort_key(x):
                 d = x['d']
                 ts = d[2]
@@ -119,14 +119,110 @@ def fetch_core_earnings(terminal_ui):
                     "Hisse": sym, 
                     "Est. EPS": d[1],
                     "Market Cap": m_cap_str,
-                    "Tarih": time.strftime('%d-%m-%Y', time.localtime(d[2]))
+                    "Tarih": time.strftime('%d-%m-%Y', time.localtime(d[2])),
+                    "Target_Mean": d[4] if len(d) > 4 and d[4] else 0
                 })
                 
-            terminal_ui.code(f"\n[+] İşlem Başarılı! Çekirdek liste hazır.\n", language="bash")
+            terminal_ui.code(f"\n[+] İşlem Başarılı! {len(parsed)} hisselik Çekirdek Liste hazır.\n", language="bash")
             return pd.DataFrame(parsed)
     except Exception as e: 
         terminal_ui.code(f"[!] HATA OLUŞTU: {e}\n", language="bash")
     return pd.DataFrame()
+
+def get_pre_earnings_alpha(ticker, target_mean):
+    """Bilanço öncesi hissenin teknik ve hacim analizini 100 üzerinden skorlar."""
+    try:
+        yf_ticker = ticker.replace('.', '-')
+        hist = yf.download(yf_ticker, period="3mo", progress=False)
+        
+        if hist is None or hist.empty or len(hist) < 50:
+            return "Veri Yetersiz", 0, {}
+            
+        closes = hist['Close'].squeeze()
+        volumes = hist['Volume'].squeeze()
+        
+        # İndikatör Hesaplamaları
+        rsi_14 = ta.rsi(closes, length=14).iloc[-1]
+        sma_20 = ta.sma(closes, length=20).iloc[-1]
+        sma_50 = ta.sma(closes, length=50).iloc[-1]
+        macd = ta.macd(closes)
+        macd_line = macd['MACD_12_26_9'].iloc[-1]
+        macd_signal = macd['MACDs_12_26_9'].iloc[-1]
+        
+        price_now = closes.iloc[-1]
+        
+        vol_10d = np.mean(volumes.iloc[-10:])
+        vol_30d_prev = np.mean(volumes.iloc[-40:-10])
+        vol_ratio = (vol_10d / vol_30d_prev) if vol_30d_prev > 0 else 1
+        
+        score = 0
+        details = {}
+        
+        # 1. Hacim Puanı (25 Puan)
+        if vol_ratio >= 1.5:
+            score += 25
+            details["Hacim Gücü"] = f"🟢 Kusursuz Gizli Toplama ({vol_ratio:.1f}x Artış)"
+        elif vol_ratio >= 1.2:
+            score += 10
+            details["Hacim Gücü"] = f"🟡 Standart Artış ({vol_ratio:.1f}x)"
+        else:
+            details["Hacim Gücü"] = f"🔴 İlgi Düşük ({vol_ratio:.1f}x)"
+            
+        # 2. RSI Momentum (20 Puan)
+        if 50 <= rsi_14 <= 70:
+            score += 20
+            details["İvme (RSI)"] = f"🟢 İdeal Momentum ({rsi_14:.1f})"
+        elif rsi_14 > 70:
+            score -= 10
+            details["İvme (RSI)"] = f"🔴 Aşırı Alım - Fiyatlanmış Bölge ({rsi_14:.1f})"
+        else:
+            details["İvme (RSI)"] = f"🟡 Zayıf Momentum ({rsi_14:.1f})"
+            
+        # 3. Trend Yönü (20 Puan)
+        if price_now > sma_20 > sma_50:
+            score += 20
+            details["Trend"] = "🟢 Güçlü Yükseliş Onayı (Fiyat > SMA20 > SMA50)"
+        elif price_now > sma_20:
+            score += 10
+            details["Trend"] = "🟡 Erken Toparlanma Sinyali (Fiyat > SMA20)"
+        else:
+            details["Trend"] = "🔴 Düşüş Trendi Teyitli"
+            
+        # 4. MACD Kesişimi (15 Puan)
+        if macd_line > macd_signal:
+            score += 15
+            details["MACD"] = "🟢 Pozitif Kesişim (Boğa Tarafında)"
+        else:
+            details["MACD"] = "🔴 Negatif Baskı Altında"
+            
+        # 5. Temel İskonto (20 Puan)
+        if target_mean and target_mean > price_now:
+            upside = ((target_mean - price_now) / price_now) * 100
+            if upside >= 15:
+                score += 20
+                details["İskonto Oranı"] = f"🟢 Yüksek Potansiyel (+%{upside:.1f})"
+            elif upside >= 5:
+                score += 10
+                details["İskonto Oranı"] = f"🟡 Sınırlı Potansiyel (+%{upside:.1f})"
+            else:
+                details["İskonto Oranı"] = f"🔴 Hedefe Ulaşmış (+%{upside:.1f})"
+        else:
+            details["İskonto Oranı"] = "⚪ Analist Verisi Yetersiz"
+            
+        # Nihai Karar
+        if score >= 80:
+            karar = f"🔥 KUSURSUZ ALIM"
+        elif score >= 60:
+            karar = f"🟢 POTANSİYEL ALIM"
+        elif score >= 40:
+            karar = f"🟡 RİSKLİ BÖLGE"
+        else:
+            karar = f"⛔ UZAK DUR"
+            
+        return karar, score, details
+        
+    except Exception as e:
+        return f"Hata", 0, {}
 
 def fetch_finnhub_analysis(ticker):
     try:
@@ -169,40 +265,6 @@ def fetch_analyst_institutions(ticker):
             return pd.DataFrame(parsed)
     except: pass
     return pd.DataFrame()
-
-def get_volume_anomaly(ticker):
-    try:
-        # Hata önleme: TradingView'dan gelebilecek BRK.B gibi sembolleri YF için BRK-B'ye çevir
-        yf_ticker = ticker.replace('.', '-')
-        
-        # 3 Aylık veri (ortalama 60+ işlem günü) çekilir ki 40 gün geriye güvenle gidilebilsin
-        hist = yf.download(yf_ticker, period="3mo", progress=False)
-        
-        if hist is not None and not hist.empty and len(hist) >= 40:
-            # Squeeze ve tolist ile Çoklu İndeks (MultiIndex) hataları bypass edilir
-            closes = hist['Close'].squeeze().tolist()
-            volumes = hist['Volume'].squeeze().tolist()
-            
-            vol_10d = np.mean(volumes[-10:])
-            vol_30d_prev = np.mean(volumes[-40:-10])
-            
-            price_10d_ago = closes[-10]
-            price_now = closes[-1]
-            
-            price_change = ((price_now - price_10d_ago) / price_10d_ago) * 100 if price_10d_ago > 0 else 0
-            
-            if vol_30d_prev > 0:
-                vol_ratio = vol_10d / vol_30d_prev
-                if vol_ratio > 1.5 and -3 <= price_change <= 5:
-                    return f"🟢 GİZLİ TOPLAMA ({vol_ratio:.1f}x Hacim Anomalisi. Fiyat yatayken yüksek hacim girişi var.)"
-                elif vol_ratio > 1.5 and price_change > 5:
-                    return f"⚠️ FİYATLANMIŞ RALLİ (+%{price_change:.1f} Artış. Beklenti önceden satın alınmış olabilir.)"
-                elif vol_ratio < 0.8:
-                    return "⚪ İLGİ DÜŞÜK (Bilanço öncesi hacim kurumuş durumda.)"
-            return "Standart Seyir"
-        return "Yeterli Geçmiş Veri Yok"
-    except Exception as e:
-        return f"Veri Çekilemedi"
 
 def fetch_institutional_screener(terminal_ui):
     terminal_ui.code("[*] Kurumsal Tarayıcı: TradingView ABD Borsaları sorgulanıyor...\n", language="bash")
@@ -545,19 +607,30 @@ with tab1:
         c2.markdown(f"<div class='quant-card'><div class='quant-card-title'>Ortalama Est. EPS</div><div class='quant-card-value'>${avg_eps:.2f}</div></div>", unsafe_allow_html=True)
         c3.markdown(f"<div class='quant-card'><div class='quant-card-title'>Tarih Aralığı</div><div class='quant-card-value'>Gelecek 30 Gün</div></div>", unsafe_allow_html=True)
         
-        st.dataframe(df_core, use_container_width=True, hide_index=True)
+        st.dataframe(df_core.drop(columns=["Target_Mean"]), use_container_width=True, hide_index=True)
         
         st.write("---")
-        st.markdown("### 🐋 Finnhub Derin Analiz (Analist Konsensüsü, Hacim Anomalisi & NLP Haber)")
+        st.markdown("### 🐋 Finnhub Derin Analiz & Pre-Earnings Alpha")
         
         selected_ticker = st.selectbox("Detaylı analiz edilecek hisseyi seçin:", df_core["Hisse"].tolist())
         
         if selected_ticker:
-            with st.spinner(f"{selected_ticker} için derin analiz verileri çekiliyor..."):
+            with st.spinner(f"{selected_ticker} için Alpha Skor ve Temel veriler çekiliyor..."):
                 curr_price, low_52, high_52, recs_data, balina = fetch_finnhub_analysis(selected_ticker)
                 analyst_df = fetch_analyst_institutions(selected_ticker)
-                anomaly_status = get_volume_anomaly(selected_ticker)
+                target_mean_val = df_core[df_core["Hisse"] == selected_ticker].iloc[0].get("Target_Mean", 0)
                 
+                # Yeni Alpha Algoritması Çağrılıyor
+                alpha_karar, alpha_score, alpha_details = get_pre_earnings_alpha(selected_ticker, target_mean_val)
+                
+            st.markdown(f"#### ⚙️ Pre-Earnings Alpha Skoru")
+            st.markdown(f"**Nihai Karar:** {alpha_karar}")
+            
+            for k, v in alpha_details.items():
+                st.markdown(f"- **{k}:** {v}")
+                
+            st.write("---")
+            
             sc1, sc2, sc3, sc4 = st.columns(4)
             sc1.metric("Güncel Fiyat", f"${curr_price:.2f}")
             sc2.metric("52W Dip/Tepe", f"${low_52:.2f} - ${high_52:.2f}")
@@ -570,12 +643,6 @@ with tab1:
                     analyst_summary = f"%{buy_pct:.0f} AL Konsensüsü"
             sc3.metric("Analist Görüşü", analyst_summary)
             sc4.metric("Balina / Insider", balina)
-            
-            st.markdown(f"**Bilanço Öncesi Hacim Anomalisi (Stealth Accumulation):** {anomaly_status}")
-            
-            dip_farki = ((curr_price - low_52) / low_52) * 100 if low_52 > 0 else 0
-            if 0 < dip_farki <= 15: st.success(f"**Katı Teknik Sinyal:** Fiyat 52 haftalık dibe %{dip_farki:.1f} yakınlıkta. Potansiyel ALIM bölgesi.")
-            elif dip_farki > 15: st.warning(f"**Katı Teknik Sinyal:** Fiyat dipten %{dip_farki:.1f} uzaklaşmış durumda.")
             
             col_left, col_right = st.columns([1, 1])
             with col_left:
