@@ -5,5 +5,5 @@ numpy
 yfinance
 plotly
 vaderSentiment
-pandas-ta
+pandas_ta
 ccxt
