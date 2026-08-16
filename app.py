@@ -130,12 +130,13 @@ def fetch_upcoming_earnings():
         st.error(f"TradingView API Hatası: {e}")
         return pd.DataFrame()
 
-# --- DÜZELTİLMİŞ ALTYAPI: 5000 HİSSELİK BULK VERİ ÇEKİMİ ---
+# --- SADECE AMERİKA HİSSELERİ (ADR/DR HARİÇ) BULK VERİ ÇEKİMİ ---
 @st.cache_data(ttl=1800)
 def fetch_general_screener(limit=5000):
     url = "https://scanner.tradingview.com/america/scan"
     payload = {
-        "filter": [{"left": "type", "operation": "in_range", "right": ["stock", "dr"]}],
+        # Sadece orijinal 'stock' türündeki varlıkları al, yabancı ADR/DR'leri dışla
+        "filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}],
         "options": {"lang": "en"},
         "markets": ["america"],
         "columns": ["name", "close", "price_52_week_low", "price_52_week_high", "Recommend.All", "market_cap_basic", "price_target_price_mean", "volume"],
@@ -222,7 +223,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🎯 Ana Tarayıcı", 
     "📈 Teknik Grafikler", 
     "📰 Haber NLP",
-    "🌍 Genel Piyasa (5000 Hisse)",
+    "🌍 ABD Hisseleri (5000)",
     "⚡ Akıllı Para Radarları"
 ])
 
@@ -323,8 +324,8 @@ with tab3:
 
 # --- TAB 4: GENEL PİYASA RADARI ---
 with tab4:
-    st.markdown("### 🌍 Genel Piyasa Radarı (Market Cap'e Göre En Büyük 5000 Hisse)")
-    with st.spinner("Piyasadaki en büyük 5000 hisse TradingView üzerinden anlık taranıyor..."):
+    st.markdown("### 🌍 Sadece ABD Hisseleri Radarı (Market Cap'e Göre En Büyük 5000 Hisse)")
+    with st.spinner("Piyasadaki en büyük 5000 orijinal ABD hissesi TradingView üzerinden anlık taranıyor..."):
         df_general = fetch_general_screener(limit=5000)
         
     if not df_general.empty:
@@ -346,8 +347,8 @@ with tab4:
 
 # --- TAB 5: AKILLI RADARLAR (5000 HİSSE & YAHOO FINANCE DESTEKLİ) ---
 with tab5:
-    st.markdown("### ⚡ Mega Fırsat Radarları (5000 Hisse Havuzu)")
-    st.markdown("<p style='color:#94a3b8; font-size:0.9rem;'>Piyasa değerine göre en büyük hisseleri vektörel hızda analiz eder. Balina ve sürpriz kâr analizlerinde derin verilere inmek için Yahoo Finance altyapısı devreye girer.</p>", unsafe_allow_html=True)
+    st.markdown("### ⚡ Mega Fırsat Radarları (5000 Orijinal ABD Hissesi Havuzu)")
+    st.markdown("<p style='color:#94a3b8; font-size:0.9rem;'>Piyasa değerine göre en büyük ABD hisselerini vektörel hızda analiz eder. Balina ve sürpriz kâr analizlerinde derin verilere inmek için Yahoo Finance altyapısı devreye girer.</p>", unsafe_allow_html=True)
     
     col_pool, col_radar = st.columns([1, 2])
     with col_pool:
@@ -364,8 +365,7 @@ with tab5:
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        # 5000 hisselik bulk (toplu) veri tek seferde çekilir
-        status_text.text(f"TradingView'dan {pool_limit} hisselik bulk veriler indiriliyor...")
+        status_text.text(f"TradingView'dan {pool_limit} orijinal ABD hissesi topluca indiriliyor...")
         tv_data = fetch_general_screener(limit=pool_limit)
         
         results = []
@@ -374,7 +374,7 @@ with tab5:
             if scan_type == "📉 52W Dip Radarı (Dipten <= %15)":
                 filtered = tv_data[(tv_data['52W Dip Farkı (%)'] > 0) & (tv_data['52W Dip Farkı (%)'] <= 15.0)]
                 filtered = filtered.sort_values(by="52W Dip Farkı (%)")
-                for _, row in filtered.head(30).iterrows(): # En iyi 30 fırsat
+                for _, row in filtered.head(30).iterrows(): 
                     results.append({"Hisse": row['Hisse'], "Detay": f"Dipten Uzaklık: %{row['52W Dip Farkı (%)']:.1f}", "Renk": "#3b82f6"})
                     
             elif scan_type == "🚀 Hedef Fiyat Ucuzluk (Potansiyel > %20)":
@@ -384,11 +384,9 @@ with tab5:
                     results.append({"Hisse": row['Hisse'], "Detay": f"Ort. Analist Hedefine Potansiyel: +%{row['Hedef Potansiyeli (%)']:.1f}", "Renk": "#ec4899"})
                     
             elif scan_type == "🐋 Balina Alımları (Insider)":
-                # Yahoo Finance ile derin analiz
                 status_text.text("Yahoo Finance üzerinden Insider işlemleri analiz ediliyor...")
                 top_volume = tv_data.sort_values(by="Hacim", ascending=False).head(50)
                 
-                # BUG FIX: enumerate kullanılarak güvenli döngü sayacı oluşturuldu
                 for count, (idx, row) in enumerate(top_volume.iterrows()):
                     sym = row['Hisse']
                     try:
@@ -396,11 +394,10 @@ with tab5:
                         insider = ticker.insider_purchases
                         if insider is not None and not insider.empty:
                             buy_shares = insider[insider['Shares'] > 0]['Shares'].sum()
-                            if buy_shares > 100000: # 100.000 lottan fazla insider alımı
+                            if buy_shares > 100000: 
                                 results.append({"Hisse": sym, "Detay": f"Güçlü İçeriden Alım Sinyali Tespit Edildi", "Renk": "#06b6d4"})
                     except:
                         pass
-                    # Artık indeks (idx) değil, ardışık sayaç (count) kullanılarak güvenli ilerleme sağlanıyor
                     progress_bar.progress((count + 1) / len(top_volume))
                     
             elif scan_type == "🔥 Altın Kesişim (Dip + Güçlü Sinyal)":
