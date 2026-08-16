@@ -134,9 +134,12 @@ def fetch_core_earnings(terminal_ui):
                 except:
                     pass
                 
+                # BUG FIX: Eksik Est. EPS ve Market Cap eklendi
                 parsed.append({
                     "Hisse": sym, 
                     "Fiyat": f"${close:.2f}",
+                    "Est. EPS": eps,
+                    "Market Cap": m_cap_str,
                     "Analist Hedefi": target_str,
                     "Tarih": time.strftime('%d-%m-%Y', time.localtime(date_ts)), 
                     "Haber Adedi": news_count,
@@ -299,14 +302,15 @@ def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower:
                 if usePH > zzP1: zzP1, zzX1, zzHigh, zzLegEvent = usePH, lastPHx, usePH, True
             elif zzP1 is None: zzP1, zzX1, zzD1, zzHigh = usePH, lastPHx, 1, usePH
             elif abs(usePH - zzP1) >= zzMinLeg: zzP0, zzX0, zzP1, zzX1, zzD1, zzPrevHigh, zzHigh, zzLegEvent = zzP1, zzX1, usePH, lastPHx, 1, zzHigh, usePH, True
-
         if not np.isnan(usePL):
             if zzD1 == -1:
                 if usePL < zzP1: zzP1, zzX1, zzLow, zzLegEvent, isZigZagLow = usePL, lastPLx, usePL, True, True
             elif zzP1 is None: zzP1, zzX1, zzD1, zzLow, isZigZagLow = usePL, lastPLx, -1, usePL, True
             elif abs(usePL - zzP1) >= zzMinLeg: zzP0, zzX0, zzP1, zzX1, zzD1, zzPrevLow, zzLow, zzLegEvent, isZigZagLow = zzP1, zzX1, usePL, lastPLx, -1, zzLow, usePL, True, True
 
-        if isZigZagLow: trailing_stop = zzLow - inv_buf_atr * (atr[i] if not np.isnan(atr[i]) else 0.0)
+        if isZigZagLow:
+            atr_now = atr[i] if not np.isnan(atr[i]) else 0.0
+            trailing_stop = zzLow - inv_buf_atr * atr_now
 
         validLeg = (zzD1 != 0) and (zzP0 is not None) and (zzP1 is not None) and (zzP0 != zzP1)
         legBull = zzD1 == 1
@@ -349,8 +353,7 @@ def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower:
             if not np.isnan(trailing_stop) and close[i] < trailing_stop: long_exit[i], position = True, False
 
     return {
-        "long_entry": long_entry, "long_exit": long_exit, "addon_signal": addon_signal,
-        "zone_top": zone_top_arr, "zone_bot": zone_bot_arr, "final_position": position,
+        "long_entry": long_entry, "addon_signal": addon_signal, "final_position": position,
         "final_zone": {"bull": aBull, "high": aHigh, "low": aLow, "set": aSet, "alive": aAlive, "rejected": aRejected},
         "final_trailing_stop": trailing_stop, "atr": atr
     }
@@ -368,7 +371,7 @@ def build_chart(df: pd.DataFrame, res: dict, symbol: str, tf_label: str, show_ba
     fig = go.Figure()
     fig.add_trace(go.Candlestick(x=d.index, open=d["open"], high=d["high"], low=d["low"], close=d["close"], name=symbol, increasing_line_color="#10b981", decreasing_line_color="#ef4444"))
     entries = np.where(res["long_entry"][idx0:])[0]
-    exits = np.where(res["long_exit"][idx0:])[0]
+    exits = np.where(res["long_exit"][idx0:])[0] if "long_exit" in res else []
     if len(entries): fig.add_trace(go.Scatter(x=d.index[entries], y=d["low"].values[entries] * 0.99, mode="markers", marker=dict(symbol="triangle-up", size=13, color="#22c55e", line=dict(width=1, color="white")), name="AL"))
     if len(exits): fig.add_trace(go.Scatter(x=d.index[exits], y=d["high"].values[exits] * 1.01, mode="markers", marker=dict(symbol="triangle-down", size=13, color="#ef4444", line=dict(width=1, color="white")), name="SAT"))
     fz = res["final_zone"]
@@ -492,7 +495,6 @@ with tab1:
             
             st.dataframe(df_core, use_container_width=True, hide_index=True)
             
-    # Tıklama yerine selectbox ile haber detaylarını gösterme mantığı
     if st.session_state.core_news_cache:
         st.write("---")
         st.markdown("##### 📰 Hisse Haber Detayları")
@@ -559,7 +561,6 @@ with tab2:
         df_view['Dip_Fark_Pct'] = df_view['Dip_Fark_Pct'].apply(lambda x: f"%{x:.1f}" if pd.notnull(x) else "-")
         df_view['Upside_Pct'] = df_view['Upside_Pct'].apply(lambda x: f"+%{x:.1f}" if pd.notnull(x) and x > 0 else ("-" if pd.isnull(x) else f"%{x:.1f}"))
         
-        # Karar Gerekçesi Sütunu Dahil
         st.dataframe(df_view[['Ticker', 'Price', 'Dip_Fark_Pct', 'Upside_Pct', 'Neden Alınmalı? (Stratejik Gerekçe)']], use_container_width=True, hide_index=True)
 
 # --- SEKME 3: FIBONACCI GOLDEN ZONE ---
@@ -622,7 +623,7 @@ with tab3:
                 entry_hits = np.where(res["long_entry"][window_start:])[0]
                 if len(entry_hits):
                     entry_idx = window_start + int(entry_hits[-1])
-                    had_prior_exit = bool(np.any(res["long_exit"][:entry_idx]))
+                    had_prior_exit = bool(np.any(res["long_exit"][:entry_idx]) if "long_exit" in res else False)
                     if had_prior_exit or not only_after_sell:
                         sig_type = "🟡 Golden Zone Reddi" if res["entry_from_gz"][entry_idx] else "🔵 ZigZag Dip Onayı"
                         gLow, gTop = _golden_bounds(res["final_zone"], golden_lower, golden_upper)
@@ -632,7 +633,7 @@ with tab3:
                 addon_hits = np.where(res["addon_signal"][window_start:])[0]
                 if res["final_position"] and len(addon_hits):
                     addon_idx = window_start + int(addon_hits[-1])
-                    sig_type = "🟡 Golden Zone Reddi" if res["addon_from_gz"][addon_idx] else "🔵 ZigZag Dip Onayı"
+                    sig_type = "🟡 Golden Zone Reddi" if res.get("addon_from_gz", np.zeros(n))[addon_idx] else "🔵 ZigZag Dip Onayı"
                     gLow, gTop = _golden_bounds(res["final_zone"], golden_lower, golden_upper)
                     open_idx = res.get("open_entry_idx")
                     open_price = round(float(df["close"].iloc[open_idx]), 4) if open_idx is not None else None
@@ -721,14 +722,14 @@ with tab4:
                 try:
                     if mkt["is_crypto"]: df = batch_data.get(sym)
                     else:
-                        y_tick = f"{sym.replace('.', '-')}{mkt['yf_suffix']}"
-                        df = batch_data.copy() if len(symbols) == 1 else batch_data[y_tick].copy()
-                        df.columns = [c.lower() for c in df.columns]
+                        y_tick = f"{s.replace('.', '-')}{mkt['yf_suffix']}"
+                        df = batch_data.copy() if len(symbols) == 1 else batch_data.get(y_tick)
+                        if df is not None: df.columns = [c.lower() for c in df.columns]
                         
                     if df is None or len(df.dropna()) < 50: continue
                     df = df.dropna()
                     
-                    if "resample" in tf:
+                    if "resample" in tf and tf["resample"]:
                         df = df.resample(tf["resample"]).agg({"open":"first", "high":"max", "low":"min", "close":"last", "volume":"sum"}).dropna()
                     if len(df) < 50: continue
                     
@@ -800,14 +801,9 @@ with tab4:
 # --- SEKME 5: MAKRO HABER VE DUYGU ANALİZİ ---
 with tab5:
     st.markdown("### 📰 Şirket Haberleri ve Duygu Skoru")
-    
     col_news1, col_news2 = st.columns([3, 1])
-    with col_news1:
-        news_ticker = st.text_input("Haberlerini Çekmek İstediğiniz Hisse Sembolü (Örn: AAPL, MSFT):", "AAPL")
-    with col_news2:
-        st.write("") 
-        st.write("")
-        run_news = st.button("Haberleri Getir", use_container_width=True)
+    with col_news1: news_ticker = st.text_input("Haberlerini Çekmek İstediğiniz Hisse Sembolü (Örn: AAPL, MSFT):", "AAPL")
+    with col_news2: st.write(""); st.write(""); run_news = st.button("Haberleri Getir", use_container_width=True)
         
     if run_news:
         term_ui5 = st.empty()
@@ -816,7 +812,6 @@ with tab5:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=7)
         url = f"https://finnhub.io/api/v1/company-news?symbol={news_ticker}&from={start_date.strftime('%Y-%m-%d')}&to={end_date.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}"
-        
         try:
             news_res = requests.get(url).json()
             if news_res:
@@ -826,17 +821,6 @@ with tab5:
                     if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>POZİTİF ({score:.2f})</span>"
                     elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>NEGATİF ({score:.2f})</span>"
                     else: sentiment_ui = f"<span style='color: var(--text-muted); font-size: 0.75rem; font-weight: bold;'>NÖTR ({score:.2f})</span>"
-                        
-                    st.markdown(f"""
-                    <div class='quant-card' style='padding: 12px;'>
-                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
-                            <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>
-                            {sentiment_ui}
-                        </div>
-                        <div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else: 
-                term_ui5.code("[-] Son 7 güne ait majör bir haber bulunamadı.\n", language="bash")
-        except Exception as e: 
-            term_ui5.code(f"[!] HATA: Veri akışı sağlanamadı. Nedeni: {e}\n", language="bash")
+                    st.markdown(f"<div class='quant-card' style='padding: 12px;'><div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'><a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>{sentiment_ui}</div><div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div></div>", unsafe_allow_html=True)
+            else: term_ui5.code("[-] Son 7 güne ait majör bir haber bulunamadı.\n", language="bash")
+        except Exception as e: term_ui5.code(f"[!] HATA: Veri akışı sağlanamadı. Nedeni: {e}\n", language="bash")
