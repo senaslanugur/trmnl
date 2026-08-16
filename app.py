@@ -85,7 +85,6 @@ def fetch_core_earnings(terminal_ui):
     payload = {
         "filter": [
             {"left": "earnings_release_next_date", "operation": "in_range", "right": [now, one_month_later]}
-            # EPS > 0 KISITLAMASI KALDIRILDI!
         ],
         "markets": ["america"],
         "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic"],
@@ -130,10 +129,11 @@ def fetch_core_earnings(terminal_ui):
     return pd.DataFrame()
 
 def get_pre_earnings_alpha(ticker):
-    """Bilanço öncesi hissenin teknik ve hacim analizini 100 üzerinden skorlar."""
+    """Bilanço öncesi hissenin teknik, hacim, temel ve squeeze analizini 100 üzerinden skorlar."""
     try:
         yf_ticker = ticker.replace('.', '-')
-        hist = yf.download(yf_ticker, period="3mo", progress=False)
+        stock = yf.Ticker(yf_ticker)
+        hist = stock.history(period="3mo", progress=False)
         
         if hist is None or hist.empty or len(hist) < 50:
             return "Veri Yetersiz", 0, {}
@@ -157,47 +157,111 @@ def get_pre_earnings_alpha(ticker):
         score = 0
         details = {}
         
+        # 1. Hacim Anomalisi (20 Puan)
         if vol_ratio >= 1.5:
-            score += 30
+            score += 20
             details["Hacim Gücü"] = f"🟢 Kusursuz Gizli Toplama ({vol_ratio:.1f}x Artış)"
         elif vol_ratio >= 1.2:
-            score += 15
+            score += 10
             details["Hacim Gücü"] = f"🟡 Standart Artış ({vol_ratio:.1f}x)"
         else:
             details["Hacim Gücü"] = f"🔴 İlgi Düşük ({vol_ratio:.1f}x)"
             
+        # 2. RSI Momentum (15 Puan)
         if 50 <= rsi_14 <= 70:
-            score += 25
+            score += 15
             details["İvme (RSI)"] = f"🟢 İdeal Momentum ({rsi_14:.1f})"
         elif rsi_14 > 70:
-            score -= 10
-            details["İvme (RSI)"] = f"🔴 Aşırı Alım - Fiyatlanmış Bölge ({rsi_14:.1f})"
+            score -= 10 # Ceza puanı
+            details["İvme (RSI)"] = f"🔴 Aşırı Alım - Fiyatlanmış ({rsi_14:.1f})"
         else:
             details["İvme (RSI)"] = f"🟡 Zayıf Momentum ({rsi_14:.1f})"
             
+        # 3. Trend Onayı (15 Puan)
         if price_now > sma_20 > sma_50:
-            score += 25
+            score += 15
             details["Trend"] = "🟢 Güçlü Yükseliş Onayı (Fiyat > SMA20 > SMA50)"
         elif price_now > sma_20:
-            score += 10
-            details["Trend"] = "🟡 Erken Toparlanma Sinyali (Fiyat > SMA20)"
+            score += 5
+            details["Trend"] = "🟡 Erken Toparlanma Sinyali"
         else:
-            details["Trend"] = "🔴 Düşüş Trendi Teyitli"
+            details["Trend"] = "🔴 Düşüş Trendi"
             
+        # 4. MACD Kesişimi (10 Puan)
         if macd_line > macd_signal:
-            score += 20
-            details["MACD"] = "🟢 Pozitif Kesişim (Boğa Tarafında)"
+            score += 10
+            details["MACD"] = "🟢 Pozitif Kesişim"
         else:
             details["MACD"] = "🔴 Negatif Baskı Altında"
             
-        if score >= 80:
-            karar = f"🔥 KUSURSUZ ALIM"
-        elif score >= 60:
-            karar = f"🟢 POTANSİYEL ALIM"
-        elif score >= 40:
-            karar = f"🟡 RİSKLİ BÖLGE"
+        # 5. Temel İskonto Hedefi (15 Puan)
+        target_mean = None
+        try:
+            target_mean = stock.info.get('targetMeanPrice')
+        except: pass
+        
+        if target_mean and target_mean > price_now:
+            upside = ((target_mean - price_now) / price_now) * 100
+            if upside >= 15:
+                score += 15
+                details["İskonto Oranı"] = f"🟢 Yüksek Potansiyel (+%{upside:.1f})"
+            elif upside >= 5:
+                score += 5
+                details["İskonto Oranı"] = f"🟡 Sınırlı Potansiyel (+%{upside:.1f})"
+            else:
+                details["İskonto Oranı"] = f"🔴 Hedefe Ulaşmış (+%{upside:.1f})"
         else:
-            karar = f"⛔ UZAK DUR"
+            details["İskonto Oranı"] = "⚪ Analist Verisi Yetersiz/Düşüş"
+            
+        # 6. Short Squeeze Yakıtı (10 Puan)
+        short_pct = 0
+        try:
+            info_short = stock.info.get('shortPercentOfFloat', 0)
+            if info_short is not None:
+                short_pct = info_short * 100
+        except: pass
+        
+        if short_pct > 10:
+            score += 10
+            details["Squeeze Yakıtı (Açığa Satış)"] = f"🟢 Çok Yüksek (%{short_pct:.1f} Short)"
+        elif short_pct > 5:
+            score += 5
+            details["Squeeze Yakıtı (Açığa Satış)"] = f"🟡 Orta Seviye (%{short_pct:.1f} Short)"
+        else:
+            details["Squeeze Yakıtı (Açığa Satış)"] = f"⚪ Düşük Risk (%{short_pct:.1f} Short)"
+
+        # 7. Tarihsel Bilanço Başarısı (15 Puan)
+        beat_count = 0
+        total_quarters = 0
+        try:
+            earn_url = f"https://finnhub.io/api/v1/stock/earnings?symbol={ticker}&token={FINNHUB_API_KEY}"
+            earn_data = requests.get(earn_url, timeout=5).json()
+            if earn_data and isinstance(earn_data, list):
+                for q in earn_data[:4]:
+                    if q.get('actual') is not None and q.get('estimate') is not None:
+                        total_quarters += 1
+                        if q['actual'] > q['estimate']:
+                            beat_count += 1
+        except: pass
+        
+        if total_quarters > 0:
+            beat_rate = (beat_count / total_quarters) * 100
+            if beat_rate == 100:
+                score += 15
+                details["Bilanço Sabıkası (Beat Rate)"] = f"🟢 Kusursuz (%{beat_rate:.0f} Başarı)"
+            elif beat_rate >= 75:
+                score += 10
+                details["Bilanço Sabıkası (Beat Rate)"] = f"🟡 Güçlü (%{beat_rate:.0f} Başarı)"
+            else:
+                details["Bilanço Sabıkası (Beat Rate)"] = f"🔴 Zayıf/İstikrarsız (%{beat_rate:.0f} Başarı)"
+        else:
+            details["Bilanço Sabıkası (Beat Rate)"] = "⚪ Veri Yok"
+            
+        # Nihai Karar
+        if score >= 80: karar = f"🔥 KUSURSUZ ALIM ({score}/100)"
+        elif score >= 60: karar = f"🟢 POTANSİYEL ALIM ({score}/100)"
+        elif score >= 40: karar = f"🟡 RİSKLİ BÖLGE ({score}/100)"
+        else: karar = f"⛔ UZAK DUR ({score}/100)"
             
         return karar, score, details
         
@@ -572,9 +636,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 # --- SEKME 1: ÇEKİRDEK (ORİJİNAL DÜZENE DÖNDÜ, ANALİST/HABER EKLENDİ) ---
 with tab1:
-    st.markdown("##### 🎯 Kazanç Takvimi ve Derin Analiz")
-    st.caption("Orijinal amacına uygun olarak bilançosu yaklaşan şirketleri listeler. Seçilen hisse üzerinde Derin Analiz gerçekleştirir.")
-    
+    st.markdown("##### 🎯 Analist Destekli Kazanç Takvimi ve Haber Analizi")
     if st.button("Verileri Çek / Güncelle (Tab-1)"):
         term_ui1 = st.empty()
         st.session_state.core_df = fetch_core_earnings(term_ui1)
