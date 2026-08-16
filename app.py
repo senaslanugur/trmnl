@@ -21,6 +21,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Tab-1 Çekirdek Haber Hafızası
+if "core_news_cache" not in st.session_state:
+    st.session_state.core_news_cache = {}
+
 # Tab-2 Kurumsal Tarayıcı Hafızası
 if "tab2_scanned" not in st.session_state:
     st.session_state.tab2_scanned = False
@@ -51,6 +55,7 @@ st.markdown("""
     .quant-card-value { font-size: 1.6rem; color: #ffffff; font-weight: 900; letter-spacing: -0.5px; }
     .badge-bullish { background: rgba(0, 200, 83, 0.15); color: var(--accent-green); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(0, 200, 83, 0.3); }
     .badge-bearish { background: rgba(213, 0, 0, 0.15); color: var(--accent-red); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(213, 0, 0, 0.3); }
+    .info-box { background: rgba(41, 98, 255, 0.1); border-left: 4px solid var(--accent-blue); padding: 12px; margin-bottom: 16px; border-radius: 4px; font-size: 0.9rem; line-height: 1.5; }
     div[data-testid="stMetricValue"] > div { font-size: 1.4rem !important; font-weight: 800 !important; white-space: normal !important; }
     div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; color: var(--text-muted) !important; text-transform: uppercase; }
     .terminal-box { background-color: #000000; color: #00ff00; font-family: 'Courier New', Courier, monospace; padding: 10px; border-radius: 5px; height: 200px; overflow-y: auto; border: 1px solid #333; margin-bottom: 15px;}
@@ -70,37 +75,78 @@ def get_nlp_engine():
     return analyzer
 
 def fetch_core_earnings(terminal_ui):
-    terminal_ui.code("[*] TradingView Kazanç Takvimi API'sine bağlanılıyor...\n", language="bash")
+    terminal_ui.code("[*] TradingView Kazanç Takvimi ve Hedef Fiyat API'sine bağlanılıyor...\n", language="bash")
     time.sleep(0.5)
-    url = "https://scanner.tradingview.com/america/scan?label-product=calendar-earnings"
+    url = "https://scanner.tradingview.com/america/scan"
     now = int(time.time())
     one_month_later = now + (30 * 24 * 60 * 60)
+    
+    # TV'den bilançosu yaklaşan EN BÜYÜK 25 hisseyi ve analist hedeflerini çekiyoruz
     payload = {
-        "filter": [{"left": "earnings_release_next_date", "operation": "in_range", "right": [now, one_month_later]}, {"left": "earnings_per_share_forecast_next_fq", "operation": "greater", "right": 0}],
+        "filter": [
+            {"left": "earnings_release_next_date", "operation": "in_range", "right": [now, one_month_later]}, 
+            {"left": "earnings_per_share_forecast_next_fq", "operation": "greater", "right": 0}
+        ],
         "markets": ["america"],
-        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic"],
-        "sort": {"sortBy": "earnings_release_next_date", "sortOrder": "asc"},
-        "range": [0, 5000]
+        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic", "close", "price_target_price_mean"],
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+        "range": [0, 25] # Hızlı haber taraması için limit 25
     }
+    
+    analyzer = get_nlp_engine()
+    st.session_state.core_news_cache = {}
+    
     try:
         resp = requests.post(url, json=payload)
-        terminal_ui.code(f"[*] Sunucu Yanıtı: {resp.status_code}\n[*] Veriler işleniyor...\n", language="bash")
         if resp.status_code == 200:
             data = resp.json().get('data', [])
-            def sort_key(x):
-                d = x['d']
-                ts = d[2]
-                day_timestamp = ts - (ts % 86400)
-                m_cap = d[3] if d[3] is not None else 0
-                return (day_timestamp, -m_cap)
-            data.sort(key=sort_key)
+            terminal_ui.code(f"[*] TradingView'dan {len(data)} büyük hisse alındı.\n[*] Finnhub üzerinden her hisse için NLP Haber Analizi başlatılıyor...\n", language="bash")
+            
             parsed = []
-            for item in data:
+            start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            
+            for i, item in enumerate(data):
+                sym = item['s'].split(':')[-1]
                 d = item['d']
-                val = d[3] or 0
-                m_cap_str = f"${val/1e9:.2f}B" if val >= 1e9 else (f"${val/1e6:.2f}M" if val >= 1e6 else f"${val:.2f}")
-                parsed.append({"Hisse": item['s'].split(':')[-1], "Est. EPS": d[1], "Tarih": time.strftime('%Y-%m-%d', time.localtime(d[2])), "Market Cap": m_cap_str})
-            terminal_ui.code(f"[+] İşlem Başarılı! {len(parsed)} hisse bulundu.\n", language="bash")
+                eps, date_ts, mcap, close, target_mean = d[1], d[2], d[3] or 0, d[4], d[5]
+                
+                m_cap_str = f"${mcap/1e9:.2f}B" if mcap >= 1e9 else (f"${mcap/1e6:.2f}M" if mcap >= 1e6 else f"${mcap:.2f}")
+                target_str = f"${target_mean:.2f}" if target_mean else "Belirsiz"
+                
+                # Haberleri Çek ve Analiz Et
+                news_count = 0
+                signal_str = "NÖTR ⚖️"
+                
+                try:
+                    news_url = f"https://finnhub.io/api/v1/company-news?symbol={sym}&from={start_date}&to={end_date}&token={FINNHUB_API_KEY}"
+                    news_data = requests.get(news_url).json()
+                    
+                    if news_data and isinstance(news_data, list):
+                        news_count = len(news_data)
+                        st.session_state.core_news_cache[sym] = news_data[:5] # Detay paneli için son 5 haberi kaydet
+                        
+                        if news_count > 0:
+                            # Son haberin duygusal skoru
+                            latest_score = analyzer.polarity_scores(news_data[0]['headline'])['compound']
+                            if latest_score >= 0.15: signal_str = "AL 🚀"
+                            elif latest_score <= -0.15: signal_str = "SAT ⚠️"
+                except:
+                    pass
+                
+                parsed.append({
+                    "Hisse": sym, 
+                    "Fiyat": f"${close:.2f}",
+                    "Analist Hedefi": target_str,
+                    "Tarih": time.strftime('%d-%m-%Y', time.localtime(date_ts)), 
+                    "Haber Adedi": news_count,
+                    "Son Haber Sinyali": signal_str,
+                    "Detaylar": "Aşağıdan Seçin 👇"
+                })
+                
+                terminal_ui.code(f"   [{i+1}/{len(data)}] {sym} analiz edildi. Haber: {news_count} | Sinyal: {signal_str}", language="bash")
+                
+            terminal_ui.code(f"\n[+] İşlem Başarılı!\n", language="bash")
             return pd.DataFrame(parsed)
     except Exception as e: 
         terminal_ui.code(f"[!] HATA OLUŞTU: {e}\n", language="bash")
@@ -120,7 +166,7 @@ def fetch_institutional_screener(terminal_ui):
     }
     try:
         resp = requests.post(url, json=payload)
-        terminal_ui.code(f"[*] API Yanıtı: {resp.status_code}. Matematiksel modellemeler yapılıyor...\n", language="bash")
+        terminal_ui.code(f"[*] API Yanıtı: {resp.status_code}. Matematiksel modellemeler ve Kurumsal Karar Gerekçeleri oluşturuluyor...\n", language="bash")
         if resp.status_code == 200:
             parsed = []
             for item in resp.json().get('data', []):
@@ -128,14 +174,28 @@ def fetch_institutional_screener(terminal_ui):
                 close = float(d[1]) if len(d) > 1 and d[1] is not None else 0.0
                 low52 = float(d[2]) if len(d) > 2 and d[2] is not None else 0.0
                 target_mean = float(d[6]) if len(d) > 6 and d[6] is not None else 0.0
+                tv_signal = d[4] if len(d) > 4 and d[4] is not None else 0.0
+                
                 dip_farki = ((close - low52) / low52) * 100 if low52 > 0 else 0
                 target_pot = ((target_mean - close) / close) * 100 if close > 0 else 0
+                
+                # Karar Gerekçesi (Neden Alınmalı?) Oluşturma
+                reasons = []
+                if dip_farki <= 10.0: reasons.append("52W Dibe Çok Yakın (Düşük Risk)")
+                if target_pot >= 20.0: reasons.append(f"Analistlere Göre %{target_pot:.0f} İskontolu")
+                if tv_signal >= 0.5: reasons.append("Güçlü Kurumsal Para Girişi")
+                
+                rationale = " + ".join(reasons) if reasons else "Standart Trend Takibi"
+                
                 parsed.append({
-                    "Ticker": sym, "Price": close, "Dip_Fark_Pct": dip_farki, 
-                    "Upside_Pct": target_pot, "TV_Signal": d[4] if len(d) > 4 else 0, 
-                    "Market_Cap": d[5] if len(d) > 5 else 0
+                    "Ticker": sym, 
+                    "Price": close, 
+                    "Dip_Fark_Pct": dip_farki, 
+                    "Upside_Pct": target_pot, 
+                    "TV_Signal": tv_signal, 
+                    "Neden Alınmalı? (Stratejik Gerekçe)": rationale
                 })
-            terminal_ui.code(f"[+] Başarılı! Toplam {len(parsed)} orijinal hisse vektörüne ulaşıldı.\n", language="bash")
+            terminal_ui.code(f"[+] Başarılı! Toplam {len(parsed)} hisse skorlandı.\n", language="bash")
             return pd.DataFrame(parsed)
     except Exception as e: 
         terminal_ui.code(f"[!] HATA: {e}\n", language="bash")
@@ -206,6 +266,7 @@ def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower:
     high, low, close, openp = df["high"].values.astype(float), df["low"].values.astype(float), df["close"].values.astype(float), df["open"].values.astype(float)
     atr = wilder_atr(df, 14)
     ph_val, pl_val = detect_pivots(df, left, right)
+
     zzP0 = zzP1 = zzX0 = zzX1 = None
     zzD1 = 0
     zzHigh = zzPrevHigh = zzLow = zzPrevLow = None
@@ -213,11 +274,9 @@ def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower:
     aHigh = aLow = aBornBar = None
     trailing_stop = np.nan
     position = False
-    long_entry, long_exit = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
-    entry_from_gz, entry_from_zz = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
-    addon_signal, addon_from_gz, addon_from_zz = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
-    zone_top_arr, zone_bot_arr, zone_bull_arr = np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan)
-    near_ratio = min(golden_lower, golden_upper)
+
+    long_entry, long_exit, addon_signal = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
+    zone_top_arr, zone_bot_arr = np.full(n, np.nan), np.full(n, np.nan)
 
     for i in range(n):
         newPH, newPL = (ph_val[i] if i - right >= 0 else np.nan), (pl_val[i] if i - right >= 0 else np.nan)
@@ -225,7 +284,7 @@ def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower:
         if not np.isnan(newPH) and not np.isnan(newPL):
             if zzP1 is None: usePH, usePL = np.nan, np.nan
             else:
-                dH, dL = abs(newPH - zzP1), abs(newPL - zzP1)
+                dH, dL = abs(usePH - zzP1), abs(usePL - zzP1)
                 if dH > dL: usePL = np.nan
                 elif dL > dH: usePH = np.nan
                 else: usePH, usePL = np.nan, np.nan
@@ -240,15 +299,14 @@ def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower:
                 if usePH > zzP1: zzP1, zzX1, zzHigh, zzLegEvent = usePH, lastPHx, usePH, True
             elif zzP1 is None: zzP1, zzX1, zzD1, zzHigh = usePH, lastPHx, 1, usePH
             elif abs(usePH - zzP1) >= zzMinLeg: zzP0, zzX0, zzP1, zzX1, zzD1, zzPrevHigh, zzHigh, zzLegEvent = zzP1, zzX1, usePH, lastPHx, 1, zzHigh, usePH, True
+
         if not np.isnan(usePL):
             if zzD1 == -1:
                 if usePL < zzP1: zzP1, zzX1, zzLow, zzLegEvent, isZigZagLow = usePL, lastPLx, usePL, True, True
             elif zzP1 is None: zzP1, zzX1, zzD1, zzLow, isZigZagLow = usePL, lastPLx, -1, usePL, True
             elif abs(usePL - zzP1) >= zzMinLeg: zzP0, zzX0, zzP1, zzX1, zzD1, zzPrevLow, zzLow, zzLegEvent, isZigZagLow = zzP1, zzX1, usePL, lastPLx, -1, zzLow, usePL, True, True
 
-        if isZigZagLow:
-            atr_now = atr[i] if not np.isnan(atr[i]) else 0.0
-            trailing_stop = zzLow - inv_buf_atr * atr_now
+        if isZigZagLow: trailing_stop = zzLow - inv_buf_atr * (atr[i] if not np.isnan(atr[i]) else 0.0)
 
         validLeg = (zzD1 != 0) and (zzP0 is not None) and (zzP1 is not None) and (zzP0 != zzP1)
         legBull = zzD1 == 1
@@ -277,26 +335,25 @@ def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower:
                 gA = (aHigh - golden_lower * rngA) if aBull else (aLow + golden_lower * rngA)
                 gB = (aHigh - golden_upper * rngA) if aBull else (aLow + golden_upper * rngA)
                 gTop, gBot = max(gA, gB), min(gA, gB)
-                zone_top_arr[i], zone_bot_arr[i], zone_bull_arr[i] = gTop, gBot, (1.0 if aBull else 0.0)
-                prevClose = close[i - 1] if i > 0 else np.nan
-                prevInside = (not np.isnan(prevClose)) and (prevClose <= gTop) and (prevClose >= gBot)
-                touched = (low[i] <= gTop) if touch_wick else prevInside
-                bullRejectRaw = aBull and touched and (close[i] > gTop) and (close[i] > openp[i])
-                if (aBornBar is not None) and (i > aBornBar) and bullRejectRaw and not aRejected: aRejected, evBullRej = True, True
+                zone_top_arr[i], zone_bot_arr[i] = gTop, gBot
+                
+                prevInside = (not np.isnan(close[i - 1])) and (close[i - 1] <= gTop) and (close[i - 1] >= gBot) if i > 0 else False
+                if aBull and (low[i] <= gTop) and (close[i] > gTop) and (close[i] > openp[i]) and (aBornBar is not None) and (i > aBornBar) and not aRejected:
+                    aRejected, evBullRej = True, True
 
         longEnterSig = evBullRej or isZigZagLow
         if not position:
-            if longEnterSig: long_entry[i], entry_from_gz[i], entry_from_zz[i], position = True, evBullRej, ((not evBullRej) and isZigZagLow), True
+            if longEnterSig: long_entry[i], position = True, True
         else:
-            if longEnterSig: addon_signal[i], addon_from_gz[i], addon_from_zz[i] = True, evBullRej, ((not evBullRej) and isZigZagLow)
+            if longEnterSig: addon_signal[i] = True
             if not np.isnan(trailing_stop) and close[i] < trailing_stop: long_exit[i], position = True, False
 
-    open_entry_idx = None
-    if position:
-        entry_positions = np.where(long_entry)[0]
-        if len(entry_positions): open_entry_idx = int(entry_positions[-1])
-
-    return {"long_entry": long_entry, "long_exit": long_exit, "entry_from_gz": entry_from_gz, "entry_from_zz": entry_from_zz, "addon_signal": addon_signal, "addon_from_gz": addon_from_gz, "addon_from_zz": addon_from_zz, "zone_top": zone_top_arr, "zone_bot": zone_bot_arr, "zone_bull": zone_bull_arr, "final_position": position, "open_entry_idx": open_entry_idx, "final_zone": {"bull": aBull, "high": aHigh, "low": aLow, "set": aSet, "alive": aAlive, "rejected": aRejected}, "final_trailing_stop": trailing_stop, "atr": atr}
+    return {
+        "long_entry": long_entry, "long_exit": long_exit, "addon_signal": addon_signal,
+        "zone_top": zone_top_arr, "zone_bot": zone_bot_arr, "final_position": position,
+        "final_zone": {"bull": aBull, "high": aHigh, "low": aLow, "set": aSet, "alive": aAlive, "rejected": aRejected},
+        "final_trailing_stop": trailing_stop, "atr": atr
+    }
 
 def _golden_bounds(fz, g_lower, g_upper):
     if not fz["set"] or fz["high"] is None or fz["low"] is None: return np.nan, np.nan
@@ -422,21 +479,59 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 
 # --- SEKME 1: ÇEKİRDEK KAZANÇ TAKVİMİ ---
 with tab1:
-    st.markdown("##### 🎯 Kazanç Takvimi ve Temel Analiz")
+    st.markdown("##### 🎯 Analist Destekli Kazanç Takvimi ve Haber Analizi")
     if st.button("Verileri Çek / Güncelle (Tab-1)"):
         term_ui1 = st.empty()
         df_core = fetch_core_earnings(term_ui1)
         if not df_core.empty:
             c1, c2, c3 = st.columns(3)
-            c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
+            c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse (Top 25)</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
             avg_eps = pd.to_numeric(df_core["Est. EPS"], errors='coerce').mean()
             c2.markdown(f"<div class='quant-card'><div class='quant-card-title'>Ortalama Est. EPS</div><div class='quant-card-value'>${avg_eps:.2f}</div></div>", unsafe_allow_html=True)
             c3.markdown(f"<div class='quant-card'><div class='quant-card-title'>Tarih Aralığı</div><div class='quant-card-value'>Gelecek 30 Gün</div></div>", unsafe_allow_html=True)
+            
             st.dataframe(df_core, use_container_width=True, hide_index=True)
+            
+    # Tıklama yerine selectbox ile haber detaylarını gösterme mantığı
+    if st.session_state.core_news_cache:
+        st.write("---")
+        st.markdown("##### 📰 Hisse Haber Detayları")
+        selected_news_ticker = st.selectbox("Tablodaki sinyallere göre işlem yapmak için aşağıdan hisseyi seçip haber detaylarını ve analist beklentilerini görüntüleyin:", list(st.session_state.core_news_cache.keys()))
+        
+        if selected_news_ticker:
+            news_items = st.session_state.core_news_cache[selected_news_ticker]
+            if news_items:
+                analyzer = get_nlp_engine()
+                for item in news_items:
+                    score = analyzer.polarity_scores(item['headline'])['compound']
+                    if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>AL ({score:.2f})</span>"
+                    elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>SAT ({score:.2f})</span>"
+                    else: sentiment_ui = f"<span style='color: var(--text-muted); font-size: 0.75rem; font-weight: bold;'>NÖTR ({score:.2f})</span>"
+                    
+                    st.markdown(f"""
+                    <div class='quant-card' style='padding: 12px;'>
+                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
+                            <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>
+                            {sentiment_ui}
+                        </div>
+                        <div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("Bu hisse için son 7 güne ait haber bulunamadı.")
 
 # --- SEKME 2: KURUMSAL TARAYICI ---
 with tab2:
     st.markdown("##### 🌍 Kurumsal Piyasa Tarayıcısı (ABD Native)")
+    st.markdown("""
+    <div class='info-box'>
+        <b>Bu Tarayıcı Nasıl Çalışır ve Neden Alım Yapmalısınız?</b><br>
+        Kurumsal fon yöneticilerinin kullandığı <b>Asimetrik Risk/Getiri</b> modeline göre çalışır. Bir hissenin sadece düşmüş olması yetmez; dönüş sinyali (Momentum) ve analist onayı gerektirir.<br>
+        • <b>52W Dibe Çok Yakın:</b> Düşüş trendi bitmiş, riskin en düşük olduğu giriş fırsatı.<br>
+        • <b>İskontolu (Upside):</b> Wall Street analistlerinin belirlediği hedef fiyata göre en az %20 yukarı potansiyel barındırır.<br>
+        • <b>Kurumsal Para Girişi:</b> TradingView konsensüsü güçlü "AL" veriyorsa momentum destekleniyor demektir.
+    </div>
+    """, unsafe_allow_html=True)
     
     if st.button("Piyasayı Tara (Tab-2)"):
         term_ui2 = st.empty()
@@ -450,7 +545,12 @@ with tab2:
         with col2: st.markdown(f"<div class='quant-card'><div class='quant-card-title'>Kantitatif 'Güçlü Al' Sinyali</div><div class='quant-card-value' style='color: var(--accent-green);'>{len(df_inst[df_inst['TV_Signal'] >= 0.5])}</div></div>", unsafe_allow_html=True)
         with col3: st.markdown(f"<div class='quant-card'><div class='quant-card-title'>Dip Noktasına <%5 Yakınlık</div><div class='quant-card-value' style='color: var(--accent-blue);'>{len(df_inst[(df_inst['Dip_Fark_Pct'] > 0) & (df_inst['Dip_Fark_Pct'] <= 5.0)])}</div></div>", unsafe_allow_html=True)
 
-        filter_mode = st.selectbox("Sinyal Stratejisi:", ["1. Yüksek Potansiyelli Dip Fırsatları (Dip <%15 + Upside >%20)", "2. Momentum ve Güçlü Al Sinyalleri (Kusursuz Teknik)", "3. Tüm Piyasa Görünümü"])
+        filter_mode = st.selectbox("Sinyal Stratejisi Filtresi:", [
+            "1. Yüksek Potansiyelli Dip Fırsatları (Dip <%15 + Upside >%20)",
+            "2. Momentum ve Güçlü Al Sinyalleri (Kusursuz Teknik)",
+            "3. Tüm Piyasa Görünümü"
+        ])
+        
         df_view = df_inst.copy()
         if filter_mode.startswith("1"): df_view = df_view[(df_view['Dip_Fark_Pct'] <= 15.0) & (df_view['Upside_Pct'] >= 20.0)].sort_values(by='Dip_Fark_Pct')
         elif filter_mode.startswith("2"): df_view = df_view[df_view['TV_Signal'] >= 0.5].sort_values(by='TV_Signal', ascending=False)
@@ -458,7 +558,9 @@ with tab2:
         df_view['Price'] = df_view['Price'].apply(lambda x: f"${x:.2f}" if pd.notnull(x) else "-")
         df_view['Dip_Fark_Pct'] = df_view['Dip_Fark_Pct'].apply(lambda x: f"%{x:.1f}" if pd.notnull(x) else "-")
         df_view['Upside_Pct'] = df_view['Upside_Pct'].apply(lambda x: f"+%{x:.1f}" if pd.notnull(x) and x > 0 else ("-" if pd.isnull(x) else f"%{x:.1f}"))
-        st.dataframe(df_view[['Ticker', 'Price', 'Dip_Fark_Pct', 'Upside_Pct', 'Market_Cap']], use_container_width=True, hide_index=True)
+        
+        # Karar Gerekçesi Sütunu Dahil
+        st.dataframe(df_view[['Ticker', 'Price', 'Dip_Fark_Pct', 'Upside_Pct', 'Neden Alınmalı? (Stratejik Gerekçe)']], use_container_width=True, hide_index=True)
 
 # --- SEKME 3: FIBONACCI GOLDEN ZONE ---
 with tab3:
@@ -486,7 +588,7 @@ with tab3:
         term_ui3 = st.empty()
         term_ui3.code(f"[*] {fib_mkt} sembol listesi alınıyor...\n", language="bash")
         
-        symbols = get_tv_symbols(mkt_cfg["tv_market"], limit=fib_limit)
+        symbols = get_market_symbols(mkt_cfg["tv_market"], limit=fib_limit)
         if symbols:
             yf_tickers = [f"{s.replace('.', '-')}{mkt_cfg['yf_suffix']}" for s in symbols]
             term_ui3.code(f"[*] {len(yf_tickers)} hisse için {fib_tf} verisi indiriliyor...\n", language="bash")
