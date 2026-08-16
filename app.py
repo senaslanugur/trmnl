@@ -21,6 +21,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Tab-1 Çekirdek Haber Hafızası
+if "core_news_cache" not in st.session_state:
+    st.session_state.core_news_cache = {}
+
 # Tab-2 Kurumsal Tarayıcı Hafızası
 if "tab2_scanned" not in st.session_state:
     st.session_state.tab2_scanned = False
@@ -62,16 +66,15 @@ st.markdown("""
 # =============================================================================
 # 2. ÇEKİRDEK (TAB-1) & KURUMSAL (TAB-2) FONKSİYONLARI 
 # =============================================================================
-FINNHUB_API_KEY = "c94i99aad3if4j50rvn0" #[cite: 1]
+FINNHUB_API_KEY = "c94i99aad3if4j50rvn0"
 
 @st.cache_resource
 def get_nlp_engine():
     analyzer = SentimentIntensityAnalyzer()
     lexicon = { 'upgrade': 4.0, 'beat': 3.5, 'surge': 3.0, 'growth': 2.5, 'profit': 2.5, 'outperform': 3.5, 'exceed': 3.0, 'downgrade': -4.0, 'miss': -4.0, 'layoff': -3.5, 'decline': -3.0, 'underperform': -3.5, 'bankruptcy': -5.0 }
-    analyzer.lexicon.update(lexicon) #[cite: 2]
+    analyzer.lexicon.update(lexicon)
     return analyzer
 
-# ÇEKİRDEK ALGORİTMA TAMAMEN ORİJİNAL HALİNE DÖNDÜRÜLDÜ (RANGE 5000)
 def fetch_core_earnings(terminal_ui):
     terminal_ui.code("[*] TradingView Kazanç Takvimi API'sine bağlanılıyor...\n", language="bash")
     time.sleep(0.5)
@@ -88,7 +91,7 @@ def fetch_core_earnings(terminal_ui):
         "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic"],
         "sort": {"sortBy": "earnings_release_next_date", "sortOrder": "asc"},
         "range": [0, 5000] 
-    } #[cite: 1, 3]
+    }
     
     try:
         resp = requests.post(url, json=payload)
@@ -96,7 +99,6 @@ def fetch_core_earnings(terminal_ui):
             data = resp.json().get('data', [])
             terminal_ui.code(f"[*] TradingView'dan {len(data)} hisse alındı.\n[*] Orijinal sıralama algoritması uygulanıyor...\n", language="bash")
             
-            # ORİJİNAL SIRALAMA ALGORİTMASI
             def sort_key(x):
                 d = x['d']
                 ts = d[2]
@@ -104,7 +106,7 @@ def fetch_core_earnings(terminal_ui):
                 m_cap = d[3] if d[3] is not None else 0
                 return (day_timestamp, -m_cap)
             
-            data.sort(key=sort_key) #[cite: 1, 3]
+            data.sort(key=sort_key)
             
             parsed = []
             for item in data:
@@ -170,13 +172,24 @@ def fetch_analyst_institutions(ticker):
 
 def get_volume_anomaly(ticker):
     try:
-        hist = yf.Ticker(ticker).history(period="45d", progress=False)
-        if not hist.empty and len(hist) >= 30:
-            vol_10d = hist['Volume'].iloc[-10:].mean()
-            vol_30d_prev = hist['Volume'].iloc[-40:-10].mean()
-            price_10d_ago = hist['Close'].iloc[-10]
-            price_now = hist['Close'].iloc[-1]
-            price_change = ((price_now - price_10d_ago) / price_10d_ago) * 100
+        # Hata önleme: TradingView'dan gelebilecek BRK.B gibi sembolleri YF için BRK-B'ye çevir
+        yf_ticker = ticker.replace('.', '-')
+        
+        # 3 Aylık veri (ortalama 60+ işlem günü) çekilir ki 40 gün geriye güvenle gidilebilsin
+        hist = yf.download(yf_ticker, period="3mo", progress=False)
+        
+        if hist is not None and not hist.empty and len(hist) >= 40:
+            # Squeeze ve tolist ile Çoklu İndeks (MultiIndex) hataları bypass edilir
+            closes = hist['Close'].squeeze().tolist()
+            volumes = hist['Volume'].squeeze().tolist()
+            
+            vol_10d = np.mean(volumes[-10:])
+            vol_30d_prev = np.mean(volumes[-40:-10])
+            
+            price_10d_ago = closes[-10]
+            price_now = closes[-1]
+            
+            price_change = ((price_now - price_10d_ago) / price_10d_ago) * 100 if price_10d_ago > 0 else 0
             
             if vol_30d_prev > 0:
                 vol_ratio = vol_10d / vol_30d_prev
@@ -186,9 +199,10 @@ def get_volume_anomaly(ticker):
                     return f"⚠️ FİYATLANMIŞ RALLİ (+%{price_change:.1f} Artış. Beklenti önceden satın alınmış olabilir.)"
                 elif vol_ratio < 0.8:
                     return "⚪ İLGİ DÜŞÜK (Bilanço öncesi hacim kurumuş durumda.)"
-        return "Standart Seyir"
-    except:
-        return "Veri Yok"
+            return "Standart Seyir"
+        return "Yeterli Geçmiş Veri Yok"
+    except Exception as e:
+        return f"Veri Çekilemedi"
 
 def fetch_institutional_screener(terminal_ui):
     terminal_ui.code("[*] Kurumsal Tarayıcı: TradingView ABD Borsaları sorgulanıyor...\n", language="bash")
@@ -517,7 +531,7 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # --- SEKME 1: ÇEKİRDEK (ORİJİNAL DÜZENE DÖNDÜ, ANALİST/HABER EKLENDİ) ---
 with tab1:
     st.markdown("##### 🎯 Kazanç Takvimi ve Derin Analiz")
-    st.caption("Orijinal amacına uygun olarak bilançosu yaklaşan şirketleri listeler. Seçilen hisse üzerinde Derin Analiz (Analist Konsensüsü ve NLP Haber Analizi) gerçekleştirir.")
+    st.caption("Orijinal amacına uygun olarak bilançosu yaklaşan şirketleri listeler. Seçilen hisse üzerinde Derin Analiz gerçekleştirir.")
     
     if st.button("Verileri Çek / Güncelle (Tab-1)"):
         term_ui1 = st.empty()
