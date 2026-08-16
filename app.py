@@ -46,10 +46,11 @@ st.markdown("""
     
     .badge-bullish { background: rgba(0, 200, 83, 0.15); color: var(--accent-green); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(0, 200, 83, 0.3); }
     .badge-bearish { background: rgba(213, 0, 0, 0.15); color: var(--accent-red); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(213, 0, 0, 0.3); }
-    .badge-warning { background: rgba(245, 158, 11, 0.15); color: var(--accent-orange); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(245, 158, 11, 0.3); }
 
     div[data-testid="stMetricValue"] > div { font-size: 1.4rem !important; font-weight: 800 !important; white-space: normal !important; }
     div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; color: var(--text-muted) !important; text-transform: uppercase; }
+    
+    .terminal-box { background-color: #000000; color: #00ff00; font-family: 'Courier New', Courier, monospace; padding: 10px; border-radius: 5px; height: 200px; overflow-y: auto; border: 1px solid #333; margin-bottom: 15px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -77,8 +78,10 @@ def get_nlp_engine():
     analyzer.lexicon.update(lexicon)
     return analyzer
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def fetch_core_earnings():
+def fetch_core_earnings(terminal_ui):
+    terminal_ui.code("[*] TradingView Kazanç Takvimi API'sine bağlanılıyor...\n", language="bash")
+    time.sleep(0.5)
+    
     url = "https://scanner.tradingview.com/america/scan?label-product=calendar-earnings"
     now = int(time.time())
     one_month_later = now + (30 * 24 * 60 * 60)
@@ -91,21 +94,36 @@ def fetch_core_earnings():
     }
     try:
         resp = requests.post(url, json=payload)
+        terminal_ui.code(f"[*] Sunucu Yanıtı: {resp.status_code}\n[*] Veriler işleniyor...\n", language="bash")
         if resp.status_code == 200:
             data = resp.json().get('data', [])
-            data.sort(key=lambda x: (x['d'][2] - (x['d'][2] % 86400), -(x['d'][3] or 0)))
+            
+            # Tab-1 Algoritmasına Dokunulmadı
+            def sort_key(x):
+                d = x['d']
+                ts = d[2]
+                day_timestamp = ts - (ts % 86400)
+                m_cap = d[3] if d[3] is not None else 0
+                return (day_timestamp, -m_cap)
+            data.sort(key=sort_key)
+            
             parsed = []
             for item in data:
                 d = item['d']
                 val = d[3] or 0
                 m_cap_str = f"${val/1e9:.2f}B" if val >= 1e9 else (f"${val/1e6:.2f}M" if val >= 1e6 else f"${val:.2f}")
                 parsed.append({"Hisse": item['s'].split(':')[-1], "Est. EPS": d[1], "Tarih": time.strftime('%Y-%m-%d', time.localtime(d[2])), "Market Cap": m_cap_str})
+            
+            terminal_ui.code(f"[+] İşlem Başarılı! {len(parsed)} hisse bulundu.\n", language="bash")
             return pd.DataFrame(parsed)
-    except: pass
+    except Exception as e: 
+        terminal_ui.code(f"[!] HATA OLUŞTU: {e}\n", language="bash")
     return pd.DataFrame()
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_institutional_screener():
+def fetch_institutional_screener(terminal_ui):
+    terminal_ui.code("[*] Kurumsal Tarayıcı: TradingView ABD Borsaları sorgulanıyor...\n", language="bash")
+    time.sleep(0.5)
+    
     url = "https://scanner.tradingview.com/america/scan"
     payload = {
         "filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}],
@@ -117,6 +135,7 @@ def fetch_institutional_screener():
     }
     try:
         resp = requests.post(url, json=payload)
+        terminal_ui.code(f"[*] API Yanıtı: {resp.status_code}. Matematiksel modellemeler (Dip Uzaklığı, Potansiyel) yapılıyor...\n", language="bash")
         if resp.status_code == 200:
             parsed = []
             for item in resp.json().get('data', []):
@@ -131,12 +150,14 @@ def fetch_institutional_screener():
                     "Upside_Pct": target_pot, "TV_Signal": d[4] if len(d) > 4 else 0, 
                     "Market_Cap": d[5] if len(d) > 5 else 0
                 })
+            terminal_ui.code(f"[+] Başarılı! Toplam {len(parsed)} orijinal hisse vektörüne ulaşıldı.\n", language="bash")
             return pd.DataFrame(parsed)
-    except: pass
+    except Exception as e: 
+        terminal_ui.code(f"[!] HATA: {e}\n", language="bash")
     return pd.DataFrame()
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_tv_symbols(tv_market: str, limit: int = 200):
+def get_tv_symbols(tv_market: str, limit: int = 200, terminal_ui=None):
+    if terminal_ui: terminal_ui.code(f"[*] {tv_market} piyasası için hisse listesi isteniyor...\n", language="bash")
     url = f"https://scanner.tradingview.com/{tv_market}/scan"
     payload = {
         "filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}],
@@ -146,22 +167,26 @@ def get_tv_symbols(tv_market: str, limit: int = 200):
     }
     try:
         resp = requests.post(url, json=payload, timeout=10)
-        if resp.status_code == 200: return [item["d"][0] for item in resp.json().get("data", [])]
+        if resp.status_code == 200: 
+            syms = [item["d"][0] for item in resp.json().get("data", [])]
+            if terminal_ui: terminal_ui.code(f"[+] {len(syms)} hisse kodu alındı.\n", language="bash")
+            return syms
     except: pass
+    if terminal_ui: terminal_ui.code("[!] Hisse listesi alınamadı.\n", language="bash")
     return []
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_crypto_symbols(limit: int):
+def get_crypto_symbols(limit: int, terminal_ui=None):
+    if terminal_ui: terminal_ui.code("[*] KuCoin API'ye bağlanılıyor...\n", language="bash")
     try:
         tickers = ccxt.kucoin().fetch_tickers()
         valid = [(s, d.get('quoteVolume', 0)) for s, d in tickers.items() if s.endswith('/USDT') and ':' not in s and s not in ['USDC/USDT', 'FDUSD/USDT', 'TUSD/USDT', 'BUSD/USDT']]
         valid.sort(key=lambda x: x[1], reverse=True)
-        return [x[0] for x in valid[:limit]]
-    except: return []
-
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_yf_batch(tickers, interval, period):
-    return yf.download(list(tickers), period=period, interval=interval, group_by="ticker", threads=True, progress=False)
+        syms = [x[0] for x in valid[:limit]]
+        if terminal_ui: terminal_ui.code(f"[+] Hacimli {len(syms)} coin tespit edildi.\n", language="bash")
+        return syms
+    except Exception as e: 
+        if terminal_ui: terminal_ui.code(f"[!] KuCoin Bağlantı Hatası: {e}\n", language="bash")
+        return []
 
 def fetch_single_ccxt(symbol, timeframe, limit=1000):
     try:
@@ -315,53 +340,53 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # --- SEKME 1: ÇEKİRDEK KAZANÇ TAKVİMİ ---
 with tab1:
     st.markdown("##### 🎯 Kazanç Takvimi ve Temel Analiz")
-    with st.spinner("Bilanço takvimi çekiliyor..."):
-        df_core = fetch_core_earnings()
-    if not df_core.empty:
-        c1, c2, c3 = st.columns(3)
-        c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
-        avg_eps = pd.to_numeric(df_core["Est. EPS"], errors='coerce').mean()
-        c2.markdown(f"<div class='quant-card'><div class='quant-card-title'>Ortalama Est. EPS</div><div class='quant-card-value'>${avg_eps:.2f}</div></div>", unsafe_allow_html=True)
-        c3.markdown(f"<div class='quant-card'><div class='quant-card-title'>Tarih Aralığı</div><div class='quant-card-value'>Gelecek 30 Gün</div></div>", unsafe_allow_html=True)
-        st.dataframe(df_core, use_container_width=True, hide_index=True)
-    else:
-        st.error("Çekirdek veri servisi şu an yanıt vermiyor.")
+    if st.button("Verileri Çek / Güncelle (Tab-1)"):
+        term_ui = st.empty()
+        df_core = fetch_core_earnings(term_ui)
+        
+        if not df_core.empty:
+            c1, c2, c3 = st.columns(3)
+            c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
+            avg_eps = pd.to_numeric(df_core["Est. EPS"], errors='coerce').mean()
+            c2.markdown(f"<div class='quant-card'><div class='quant-card-title'>Ortalama Est. EPS</div><div class='quant-card-value'>${avg_eps:.2f}</div></div>", unsafe_allow_html=True)
+            c3.markdown(f"<div class='quant-card'><div class='quant-card-title'>Tarih Aralığı</div><div class='quant-card-value'>Gelecek 30 Gün</div></div>", unsafe_allow_html=True)
+            st.dataframe(df_core, use_container_width=True, hide_index=True)
 
 # --- SEKME 2: KURUMSAL TARAYICI ---
 with tab2:
     st.markdown("##### 🌍 Kurumsal Piyasa Tarayıcısı (ABD Native)")
-    with st.spinner("Piyasa verileri yükleniyor..."):
-        df_inst = fetch_institutional_screener()
-    if not df_inst.empty:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(f"<div class='quant-card'><div class='quant-card-title'>Aktif İzlenen Varlık</div><div class='quant-card-value'>{len(df_inst):,}</div></div>", unsafe_allow_html=True)
-        with col2:
-            strong_buys = len(df_inst[df_inst['TV_Signal'] >= 0.5])
-            st.markdown(f"<div class='quant-card'><div class='quant-card-title'>Kantitatif 'Güçlü Al' Sinyali</div><div class='quant-card-value' style='color: var(--accent-green);'>{strong_buys}</div></div>", unsafe_allow_html=True)
-        with col3:
-            deep_value = len(df_inst[(df_inst['Dip_Fark_Pct'] > 0) & (df_inst['Dip_Fark_Pct'] <= 5.0)])
-            st.markdown(f"<div class='quant-card'><div class='quant-card-title'>Dip Noktasına <%5 Yakınlık</div><div class='quant-card-value' style='color: var(--accent-blue);'>{deep_value}</div></div>", unsafe_allow_html=True)
+    if st.button("Piyasayı Tara (Tab-2)"):
+        term_ui2 = st.empty()
+        df_inst = fetch_institutional_screener(term_ui2)
+        
+        if not df_inst.empty:
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.markdown(f"<div class='quant-card'><div class='quant-card-title'>Aktif İzlenen Varlık</div><div class='quant-card-value'>{len(df_inst):,}</div></div>", unsafe_allow_html=True)
+            with col2:
+                strong_buys = len(df_inst[df_inst['TV_Signal'] >= 0.5])
+                st.markdown(f"<div class='quant-card'><div class='quant-card-title'>Kantitatif 'Güçlü Al' Sinyali</div><div class='quant-card-value' style='color: var(--accent-green);'>{strong_buys}</div></div>", unsafe_allow_html=True)
+            with col3:
+                deep_value = len(df_inst[(df_inst['Dip_Fark_Pct'] > 0) & (df_inst['Dip_Fark_Pct'] <= 5.0)])
+                st.markdown(f"<div class='quant-card'><div class='quant-card-title'>Dip Noktasına <%5 Yakınlık</div><div class='quant-card-value' style='color: var(--accent-blue);'>{deep_value}</div></div>", unsafe_allow_html=True)
 
-        filter_mode = st.selectbox("Sinyal Stratejisi:", [
-            "1. Yüksek Potansiyelli Dip Fırsatları (Dip <%15 + Upside >%20)",
-            "2. Momentum ve Güçlü Al Sinyalleri (Kusursuz Teknik)",
-            "3. Tüm Piyasa Görünümü"
-        ])
-        
-        df_view = df_inst.copy()
-        if filter_mode.startswith("1"):
-            df_view = df_view[(df_view['Dip_Fark_Pct'] <= 15.0) & (df_view['Upside_Pct'] >= 20.0)].sort_values(by='Dip_Fark_Pct')
-        elif filter_mode.startswith("2"):
-            df_view = df_view[df_view['TV_Signal'] >= 0.5].sort_values(by='TV_Signal', ascending=False)
+            filter_mode = st.selectbox("Sinyal Stratejisi:", [
+                "1. Yüksek Potansiyelli Dip Fırsatları (Dip <%15 + Upside >%20)",
+                "2. Momentum ve Güçlü Al Sinyalleri (Kusursuz Teknik)",
+                "3. Tüm Piyasa Görünümü"
+            ])
             
-        df_view['Price'] = df_view['Price'].apply(lambda x: f"${x:.2f}" if pd.notnull(x) else "-")
-        df_view['Dip_Fark_Pct'] = df_view['Dip_Fark_Pct'].apply(lambda x: f"%{x:.1f}" if pd.notnull(x) else "-")
-        df_view['Upside_Pct'] = df_view['Upside_Pct'].apply(lambda x: f"+%{x:.1f}" if pd.notnull(x) and x > 0 else ("-" if pd.isnull(x) else f"%{x:.1f}"))
-        
-        st.dataframe(df_view[['Ticker', 'Price', 'Dip_Fark_Pct', 'Upside_Pct', 'Market_Cap']], use_container_width=True, hide_index=True)
-    else:
-        st.warning("Kurumsal tarama verileri şu an alınamıyor.")
+            df_view = df_inst.copy()
+            if filter_mode.startswith("1"):
+                df_view = df_view[(df_view['Dip_Fark_Pct'] <= 15.0) & (df_view['Upside_Pct'] >= 20.0)].sort_values(by='Dip_Fark_Pct')
+            elif filter_mode.startswith("2"):
+                df_view = df_view[df_view['TV_Signal'] >= 0.5].sort_values(by='TV_Signal', ascending=False)
+                
+            df_view['Price'] = df_view['Price'].apply(lambda x: f"${x:.2f}" if pd.notnull(x) else "-")
+            df_view['Dip_Fark_Pct'] = df_view['Dip_Fark_Pct'].apply(lambda x: f"%{x:.1f}" if pd.notnull(x) else "-")
+            df_view['Upside_Pct'] = df_view['Upside_Pct'].apply(lambda x: f"+%{x:.1f}" if pd.notnull(x) and x > 0 else ("-" if pd.isnull(x) else f"%{x:.1f}"))
+            
+            st.dataframe(df_view[['Ticker', 'Price', 'Dip_Fark_Pct', 'Upside_Pct', 'Market_Cap']], use_container_width=True, hide_index=True)
 
 # --- SEKME 3: FIBONACCI GOLDEN ZONE ---
 with tab3:
@@ -377,47 +402,51 @@ with tab3:
         run_fib_btn = st.button("🔍 Fibonacci Taramasını Başlat", type="primary", use_container_width=True)
         
     if run_fib_btn:
+        term_ui3 = st.empty()
+        term_ui3.code("[*] Fibonacci Motoru Başlatıldı...\n", language="bash")
         mkt, tf = MARKETS_CONFIG[fib_mkt], TF_CONFIG[fib_tf]
-        with st.spinner("Piyasa sembolleri alınıyor..."):
-            symbols = get_tv_symbols(mkt["tv_market"], limit=fib_limit) if not mkt["is_crypto"] else get_crypto_symbols(limit=fib_limit)
+        
+        symbols = get_tv_symbols(mkt["tv_market"], limit=fib_limit, terminal_ui=term_ui3) if not mkt["is_crypto"] else get_crypto_symbols(limit=fib_limit, terminal_ui=term_ui3)
         if symbols:
-            with st.spinner(f"{len(symbols)} varlık analiz ediliyor..."):
-                if mkt["is_crypto"]:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                        batch_data = {sym: df for sym, df in executor.map(lambda s: fetch_single_ccxt(s, tf["ccxt_int"]), symbols) if df is not None}
-                else:
-                    yf_tickers = [f"{s.replace('.', '-')}{mkt['yf_suffix']}" for s in symbols]
-                    batch_data = fetch_yf_batch(tuple(yf_tickers), tf["yf_int"], tf["period"])
+            term_ui3.code(f"[*] {len(symbols)} varlık için yFinance/CCXT üzerinden derin veriler indiriliyor...\n", language="bash")
+            if mkt["is_crypto"]:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                    batch_data = {sym: df for sym, df in executor.map(lambda s: fetch_single_ccxt(s, tf["ccxt_int"]), symbols) if df is not None}
+            else:
+                yf_tickers = [f"{s.replace('.', '-')}{mkt['yf_suffix']}" for s in symbols]
+                batch_data = yf.download(list(yf_tickers), period=tf["period"], interval=tf["yf_int"], group_by="ticker", threads=True, progress=False)
 
-                fresh_res, watch_res, addon_res = [], [], []
-                pb = st.progress(0)
-                for idx, sym in enumerate(symbols):
-                    pb.progress((idx + 1) / len(symbols))
-                    try:
-                        if mkt["is_crypto"]: df = batch_data.get(sym)
-                        else:
-                            y_tick = f"{sym.replace('.', '-')}{mkt['yf_suffix']}"
-                            df = batch_data[y_tick].copy() if len(symbols) > 1 else batch_data.copy()
-                            df.columns = [c.lower() for c in df.columns]
-                            
-                        if df is None or len(df.dropna()) < 80: continue
-                        df = df.dropna()
-                        res = run_fib_strategy(df)
-                        window_start = max(0, len(df) - fib_recency)
-                        price = float(df['close'].iloc[-1])
+            term_ui3.code("[*] Golden Zone Algoritması çalıştırılıyor...\n", language="bash")
+            fresh_res, watch_res, addon_res = [], [], []
+            pb = st.progress(0)
+            for idx, sym in enumerate(symbols):
+                pb.progress((idx + 1) / len(symbols))
+                try:
+                    if mkt["is_crypto"]: df = batch_data.get(sym)
+                    else:
+                        y_tick = f"{sym.replace('.', '-')}{mkt['yf_suffix']}"
+                        df = batch_data[y_tick].copy() if len(symbols) > 1 else batch_data.copy()
+                        df.columns = [c.lower() for c in df.columns]
                         
-                        if res["long_entry"][window_start:].any(): fresh_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🟢 YENİ ALIM", "Stop": res["final_trailing_stop"]})
-                        elif res["addon_signal"][window_start:].any(): addon_res.append({"Varlık": sym, "Fiyat": price, "Durum": "➕ EKLEME NOKTASI"})
-                        elif not res["final_position"] and res["final_zone"]["set"] and res["final_zone"]["bull"]:
-                            rng = res["final_zone"]["high"] - res["final_zone"]["low"]
-                            gTop = res["final_zone"]["high"] - 0.5 * rng
-                            if 0 < (price - gTop) <= fib_atr_mult * res["atr"][-1]: watch_res.append({"Varlık": sym, "Fiyat": price, "Durum": "👀 BÖLGEYE YAKLAŞIYOR"})
-                    except: pass
-                pb.empty()
-                col_r1, col_r2, col_r3 = st.columns(3)
-                with col_r1: st.markdown("##### 🟢 Taze AL"); st.dataframe(pd.DataFrame(fresh_res), use_container_width=True, hide_index=True)
-                with col_r2: st.markdown("##### 👀 Yakın Takip"); st.dataframe(pd.DataFrame(watch_res), use_container_width=True, hide_index=True)
-                with col_r3: st.markdown("##### ➕ Ekleme"); st.dataframe(pd.DataFrame(addon_res), use_container_width=True, hide_index=True)
+                    if df is None or len(df.dropna()) < 80: continue
+                    df = df.dropna()
+                    res = run_fib_strategy(df)
+                    window_start = max(0, len(df) - fib_recency)
+                    price = float(df['close'].iloc[-1])
+                    
+                    if res["long_entry"][window_start:].any(): fresh_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🟢 YENİ ALIM", "Stop": res["final_trailing_stop"]})
+                    elif res["addon_signal"][window_start:].any(): addon_res.append({"Varlık": sym, "Fiyat": price, "Durum": "➕ EKLEME NOKTASI"})
+                    elif not res["final_position"] and res["final_zone"]["set"] and res["final_zone"]["bull"]:
+                        rng = res["final_zone"]["high"] - res["final_zone"]["low"]
+                        gTop = res["final_zone"]["high"] - 0.5 * rng
+                        if 0 < (price - gTop) <= fib_atr_mult * res["atr"][-1]: watch_res.append({"Varlık": sym, "Fiyat": price, "Durum": "👀 BÖLGEYE YAKLAŞIYOR"})
+                except: pass
+            pb.empty()
+            term_ui3.code("[+] Hesaplamalar Tamamlandı!\n", language="bash")
+            col_r1, col_r2, col_r3 = st.columns(3)
+            with col_r1: st.markdown("##### 🟢 Taze AL"); st.dataframe(pd.DataFrame(fresh_res), use_container_width=True, hide_index=True)
+            with col_r2: st.markdown("##### 👀 Yakın Takip"); st.dataframe(pd.DataFrame(watch_res), use_container_width=True, hide_index=True)
+            with col_r3: st.markdown("##### ➕ Ekleme"); st.dataframe(pd.DataFrame(addon_res), use_container_width=True, hide_index=True)
 
 # --- SEKME 4: ÇOKLU ALGORİTMİK TARAMA ---
 with tab4:
@@ -432,79 +461,91 @@ with tab4:
         run_algo_btn = st.button("🚀 Algoritmik Taramayı Başlat", type="primary", use_container_width=True)
 
     if run_algo_btn:
+        term_ui4 = st.empty()
+        term_ui4.code(f"[*] {sel_algo} Motoru Başlatıldı...\n", language="bash")
         mkt, tf = MARKETS_CONFIG[algo_mkt], TF_CONFIG[algo_tf]
-        with st.spinner("Piyasa sembolleri alınıyor..."):
-            symbols = get_tv_symbols(mkt["tv_market"], limit=algo_limit) if not mkt["is_crypto"] else get_crypto_symbols(limit=algo_limit)
+        
+        symbols = get_tv_symbols(mkt["tv_market"], limit=algo_limit, terminal_ui=term_ui4) if not mkt["is_crypto"] else get_crypto_symbols(limit=algo_limit, terminal_ui=term_ui4)
         if symbols:
-            with st.spinner(f"{len(symbols)} varlık analiz ediliyor..."):
-                if mkt["is_crypto"]:
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                        batch_data = {sym: df for sym, df in executor.map(lambda s: fetch_single_ccxt(s, tf["ccxt_int"]), symbols) if df is not None}
-                else:
-                    yf_tickers = [f"{s.replace('.', '-')}{mkt['yf_suffix']}" for s in symbols]
-                    batch_data = fetch_yf_batch(tuple(yf_tickers), tf["yf_int"], tf["period"])
+            term_ui4.code(f"[*] {len(symbols)} varlık için derin veriler indiriliyor...\n", language="bash")
+            if mkt["is_crypto"]:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                    batch_data = {sym: df for sym, df in executor.map(lambda s: fetch_single_ccxt(s, tf["ccxt_int"]), symbols) if df is not None}
+            else:
+                yf_tickers = [f"{s.replace('.', '-')}{mkt['yf_suffix']}" for s in symbols]
+                batch_data = yf.download(list(yf_tickers), period=tf["period"], interval=tf["yf_int"], group_by="ticker", threads=True, progress=False)
 
-                algo_res = []
-                pb = st.progress(0)
-                for idx, sym in enumerate(symbols):
-                    pb.progress((idx + 1) / len(symbols))
-                    try:
-                        if mkt["is_crypto"]: df = batch_data.get(sym)
-                        else:
-                            y_tick = f"{sym.replace('.', '-')}{mkt['yf_suffix']}"
-                            df = batch_data[y_tick].copy() if len(symbols) > 1 else batch_data.copy()
-                            df.columns = [c.lower() for c in df.columns]
-                            
-                        if df is None or len(df.dropna()) < 50: continue
-                        df = df.dropna()
+            term_ui4.code(f"[*] Seçili formüller DataFrame üzerine uygulanıyor...\n", language="bash")
+            algo_res = []
+            pb = st.progress(0)
+            for idx, sym in enumerate(symbols):
+                pb.progress((idx + 1) / len(symbols))
+                try:
+                    if mkt["is_crypto"]: df = batch_data.get(sym)
+                    else:
+                        y_tick = f"{sym.replace('.', '-')}{mkt['yf_suffix']}"
+                        df = batch_data[y_tick].copy() if len(symbols) > 1 else batch_data.copy()
+                        df.columns = [c.lower() for c in df.columns]
                         
-                        if sel_algo.startswith("1"): df = run_lrc_strategy(df)
-                        else: df = run_wma_triple_strategy(df)
-                        
-                        window_start = max(0, len(df) - algo_recency)
-                        price = float(df['close'].iloc[-1])
-                        
-                        if df['Net_AL'].iloc[window_start:].any(): algo_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🔥 NET ALIM"})
-                        elif sel_algo.startswith("2") and df.get('Roket_Adayi', pd.Series(False)).iloc[window_start:].any(): algo_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🚀 ROKET ADAYI"})
-                    except: pass
-                pb.empty()
-                if algo_res:
-                    st.success(f"{len(algo_res)} varlıkta sinyal tespit edildi.")
-                    st.dataframe(pd.DataFrame(algo_res), use_container_width=True, hide_index=True)
-                else: st.info("Kriterlere uyan varlık bulunamadı.")
+                    if df is None or len(df.dropna()) < 50: continue
+                    df = df.dropna()
+                    
+                    if sel_algo.startswith("1"): df = run_lrc_strategy(df)
+                    else: df = run_wma_triple_strategy(df)
+                    
+                    window_start = max(0, len(df) - algo_recency)
+                    price = float(df['close'].iloc[-1])
+                    
+                    if df['Net_AL'].iloc[window_start:].any(): algo_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🔥 NET ALIM"})
+                    elif sel_algo.startswith("2") and df.get('Roket_Adayi', pd.Series(False)).iloc[window_start:].any(): algo_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🚀 ROKET ADAYI"})
+                except: pass
+            pb.empty()
+            term_ui4.code("[+] Analiz Tamamlandı!\n", language="bash")
+            if algo_res:
+                st.success(f"{len(algo_res)} varlıkta sinyal tespit edildi.")
+                st.dataframe(pd.DataFrame(algo_res), use_container_width=True, hide_index=True)
+            else: st.info("Kriterlere uyan varlık bulunamadı.")
 
 # --- SEKME 5: MAKRO HABER VE DUYGU ANALİZİ ---
 with tab5:
     st.markdown("### 📰 Şirket Haberleri ve Duygu Skoru")
-    df_inst_news = fetch_institutional_screener()
-    if not df_inst_news.empty:
-        news_ticker = st.selectbox("Haber Akışı Analizi İçin Hisse Seçin:", df_inst_news['Ticker'].head(500).tolist(), key="news_select")
-        if st.button("Haberleri Getir"):
-            with st.spinner("Haberler ve duygu analizi yükleniyor..."):
-                analyzer = get_nlp_engine()
-                end_date = datetime.now()
-                start_date = end_date - timedelta(days=7)
-                url = f"https://finnhub.io/api/v1/company-news?symbol={news_ticker}&from={start_date.strftime('%Y-%m-%d')}&to={end_date.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}"
-                
-                try:
-                    news_res = requests.get(url).json()
-                    if news_res:
-                        for item in news_res[:10]:
-                            score = analyzer.polarity_scores(item['headline'])['compound']
-                            if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>POZİTİF ({score:.2f})</span>"
-                            elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>NEGATİF ({score:.2f})</span>"
-                            else: sentiment_ui = f"<span style='color: var(--text-muted); font-size: 0.75rem; font-weight: bold;'>NÖTR ({score:.2f})</span>"
-                                
-                            st.markdown(f"""
-                            <div class='quant-card' style='padding: 12px;'>
-                                <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
-                                    <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>
-                                    {sentiment_ui}
-                                </div>
-                                <div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
-                            </div>
-                            """, unsafe_allow_html=True)
-                    else: st.info("Son 7 güne ait majör bir haber bulunamadı.")
-                except: st.error("Veri akışı sağlanamadı.")
-    else:
-        st.warning("Piyasa verisi çekilemediği için hisse listesi yüklenemedi.")
+    
+    col_news1, col_news2 = st.columns([3, 1])
+    with col_news1:
+        news_ticker = st.text_input("Haberlerini Çekmek İstediğiniz Hisse Sembolü (Örn: AAPL, MSFT):", "AAPL")
+    with col_news2:
+        st.write("") # Dikey hizalama için
+        st.write("")
+        run_news = st.button("Haberleri Getir", use_container_width=True)
+        
+    if run_news:
+        term_ui5 = st.empty()
+        term_ui5.code(f"[*] {news_ticker} için Finnhub API'sine bağlanılıyor...\n", language="bash")
+        analyzer = get_nlp_engine()
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=7)
+        url = f"https://finnhub.io/api/v1/company-news?symbol={news_ticker}&from={start_date.strftime('%Y-%m-%d')}&to={end_date.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}"
+        
+        try:
+            news_res = requests.get(url).json()
+            if news_res:
+                term_ui5.code(f"[+] {len(news_res)} haber bulundu. NLP analizleri yapılıyor...\n", language="bash")
+                for item in news_res[:10]:
+                    score = analyzer.polarity_scores(item['headline'])['compound']
+                    if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>POZİTİF ({score:.2f})</span>"
+                    elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>NEGATİF ({score:.2f})</span>"
+                    else: sentiment_ui = f"<span style='color: var(--text-muted); font-size: 0.75rem; font-weight: bold;'>NÖTR ({score:.2f})</span>"
+                        
+                    st.markdown(f"""
+                    <div class='quant-card' style='padding: 12px;'>
+                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
+                            <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>
+                            {sentiment_ui}
+                        </div>
+                        <div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else: 
+                term_ui5.code("[-] Son 7 güne ait majör bir haber bulunamadı.\n", language="bash")
+        except Exception as e: 
+            term_ui5.code(f"[!] HATA: Veri akışı sağlanamadı. Nedeni: {e}\n", language="bash")
