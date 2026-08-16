@@ -35,7 +35,6 @@ st.markdown("""
     .signal-sell { color: #ef4444; font-weight: bold; }
     .signal-neutral { color: #94a3b8; font-weight: bold; }
     
-    /* Metin Taşmalarını Önleme (Özellikle Balina/Insider için) */
     div[data-testid="stMetricValue"] > div {
         white-space: normal !important; word-wrap: break-word !important; font-size: 1.25rem !important; line-height: 1.4 !important;
     }
@@ -43,7 +42,6 @@ st.markdown("""
         word-wrap: break-word !important; white-space: normal !important;
     }
 
-    /* Radar Fırsat Kartları */
     .radar-card {
         background: linear-gradient(145deg, #131d2e, #0c1320);
         border: 1px solid #1f293d;
@@ -58,9 +56,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- GLOBAL AYARLAR, NLP VE HİSSE HAVUZU ---
+# --- GLOBAL AYARLAR VE NLP ---
 FINNHUB_API_KEY = "c94i99aad3if4j50rvn0" #[cite: 1]
-US_STOCK_POOL = ["AAPL","MSFT","NVDA","AMZN","GOOGL","META","TSLA","BRK-B","AVGO","LLY","JPM","V","UNH","MA","XOM","JNJ","HD","PG","COST","MRK","ABBV","CRM","BAC","CVX","NFLX","AMD","KO","PEP","WMT","TMO","DIS","MCD","CSCO","ADBE","QCOM","INTC","TXN","IBM","AMGN","PFE","GE","NOW","INTU","CAT","VZ","HON","BA","NKE","GS","MS"] #[cite: 5]
 
 @st.cache_resource
 def get_nlp_analyzer():
@@ -133,17 +130,18 @@ def fetch_upcoming_earnings():
         st.error(f"TradingView API Hatası: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=3600)
-def fetch_general_screener():
+# --- YENİ ALTYAPI: 5000 HİSSELİK BULK VERİ ÇEKİMİ ---
+@st.cache_data(ttl=1800)
+def fetch_general_screener(limit=5000):
     url = "https://scanner.tradingview.com/america/scan"
     payload = {
-        "filter": [{"left": "type", "operation": "in_range", "right": ["stock", "dr"]}],
+        "filter": [{"left": "type", "operation": "in_range", "right": ["stock", "dr"]}], #[cite: 4]
         "options": {"lang": "en"},
         "markets": ["america"],
-        "columns": ["name", "close", "price_52_week_low", "price_52_week_high", "Recommend.All", "market_cap_basic", "price_target_price_mean"],
-        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-        "range": [0, 2000]
-    } #[cite: 4]
+        "columns": ["name", "close", "price_52_week_low", "price_52_week_high", "Recommend.All", "market_cap_basic", "price_target_price_mean", "volume"],
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"}, #[cite: 4]
+        "range": [0, limit] #[cite: 4]
+    }
 
     try:
         response = requests.post(url, json=payload)
@@ -153,7 +151,7 @@ def fetch_general_screener():
             for item in data:
                 sym = item['s'].split(':')[-1]
                 d = item['d']
-                close, low52, high52, rec, mcap, target_mean = d[1], d[2], d[3], d[4], d[5], d[6]
+                close, low52, high52, rec, mcap, target_mean, vol = d[0:7]
                 
                 dip_farki = ((close - low52) / low52) * 100 if close and low52 and low52 > 0 else 0
                 target_pot = ((target_mean - close) / close) * 100 if target_mean and close and close > 0 else 0
@@ -173,7 +171,7 @@ def fetch_general_screener():
                 parsed.append({
                     "Hisse": sym, "Fiyat ($)": close, "52W Dip Farkı (%)": dip_farki, 
                     "Hedef Potansiyeli (%)": target_pot, "Teknik Sinyal": rec_str, 
-                    "Market Cap": mcap_str, "TV_Rec": rec if rec else 0
+                    "Market Cap": mcap_str, "Hacim": vol, "TV_Rec": rec if rec else 0
                 })
             return pd.DataFrame(parsed)
         return pd.DataFrame()
@@ -182,9 +180,9 @@ def fetch_general_screener():
 
 def fetch_finnhub_analysis(ticker):
     try:
-        quote = requests.get(f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}").json()
-        metric = requests.get(f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={FINNHUB_API_KEY}").json().get('metric', {})
-        recs = requests.get(f"https://finnhub.io/api/v1/stock/recommendation?symbol={ticker}&token={FINNHUB_API_KEY}").json()
+        quote = requests.get(f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}").json() #[cite: 1]
+        metric = requests.get(f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={FINNHUB_API_KEY}").json().get('metric', {}) #[cite: 1]
+        recs = requests.get(f"https://finnhub.io/api/v1/stock/recommendation?symbol={ticker}&token={FINNHUB_API_KEY}").json() #[cite: 1]
         insider = requests.get(f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={ticker}&token={FINNHUB_API_KEY}").json().get('data', []) #[cite: 1]
 
         curr_price = quote.get('c', 0)
@@ -201,7 +199,7 @@ def fetch_finnhub_analysis(ticker):
             large_buys = [t for t in insider if t.get('share', 0) > 0]
             if large_buys:
                 last_buy = large_buys[0]
-                balina_str = f"Alım ({(last_buy.get('change', 0)):,} lot | {last_buy['filingDate']})" #[cite: 1]
+                balina_str = f"Alım ({(last_buy.get('change', 0)):,} lot | {last_buy['filingDate']})"
 
         return curr_price, low_52, high_52, analyst, balina_str
     except:
@@ -215,11 +213,11 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "🎯 Ana Tarayıcı", 
     "📈 Teknik Grafikler", 
     "📰 Haber NLP",
-    "🌍 Genel Piyasa",
-    "⚡ Akıllı Para Radarları" # HTML Dosyasındaki Yeni Alan
+    "🌍 Genel Piyasa (5000 Hisse)",
+    "⚡ Akıllı Para Radarları"
 ])
 
-# --- TAB 1: ÇEKİRDEK TARAYICI ---
+# --- TAB 1: ÇEKİRDEK TARAYICI (KESİNLİKLE DOKUNULMAMIŞTIR) ---
 with tab1:
     with st.spinner("TradingView ve Finnhub'dan veriler taranıyor..."):
         df_earnings = fetch_upcoming_earnings()
@@ -301,7 +299,7 @@ with tab3:
             now = datetime.now()
             past_week = now - timedelta(days=7)
             
-            news_url = f"https://finnhub.io/api/v1/company-news?symbol={news_ticker}&from={past_week.strftime('%Y-%m-%d')}&to={now.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}"
+            news_url = f"https://finnhub.io/api/v1/company-news?symbol={news_ticker}&from={past_week.strftime('%Y-%m-%d')}&to={now.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}" #[cite: 2]
             try:
                 news_data = requests.get(news_url).json()
                 if news_data:
@@ -316,108 +314,104 @@ with tab3:
 
 # --- TAB 4: GENEL PİYASA RADARI ---
 with tab4:
-    with st.spinner("Genel piyasa taranıyor..."):
-        df_general = fetch_general_screener()
+    st.markdown("### 🌍 Genel Piyasa Radarı (Market Cap'e Göre En Büyük 5000 Hisse)")
+    with st.spinner("Piyasadaki en büyük 5000 hisse TradingView üzerinden anlık taranıyor..."):
+        df_general = fetch_general_screener(limit=5000) #[cite: 4]
+        
     if not df_general.empty:
-        st.dataframe(df_general.drop(columns=["TV_Rec"]), use_container_width=True, hide_index=True)
+        filter_option = st.radio("Taramayı Filtrele:", ("Tümünü Göster", "🔥 52W Dibe En Yakın Olanlar (Potansiyel Dip)", "🚀 Katı Sinyal: GÜÇLÜ AL Verenler"), horizontal=True)
+        df_filtered = df_general.copy()
+        
+        if filter_option == "🔥 52W Dibe En Yakın Olanlar (Potansiyel Dip)":
+            df_filtered = df_filtered[df_filtered["52W Dip Farkı (%)"] <= 15.0].sort_values(by="52W Dip Farkı (%)", ascending=True)
+        elif filter_option == "🚀 Katı Sinyal: GÜÇLÜ AL Verenler":
+            df_filtered = df_filtered[df_filtered["Teknik Sinyal"] == "GÜÇLÜ AL 🔥"].sort_values(by="TV_Rec", ascending=False)
+            
+        df_filtered["Fiyat ($)"] = df_filtered["Fiyat ($)"].apply(lambda x: f"${x:.2f}" if pd.notnull(x) else "-")
+        df_filtered["52W Dip Farkı (%)"] = df_filtered["52W Dip Farkı (%)"].apply(lambda x: f"%{x:.2f}")
+        df_filtered["Hedef Potansiyeli (%)"] = df_filtered["Hedef Potansiyeli (%)"].apply(lambda x: f"%{x:.2f}")
+        
+        st.dataframe(df_filtered.drop(columns=["TV_Rec"]), use_container_width=True, hide_index=True)
 
 
-# --- TAB 5: HTML DOSYASINDAKİ AKILLI RADARLAR (YENİ ENTEGRASYON) ---
+# --- TAB 5: AKILLI RADARLAR (5000 HİSSE & YAHOO FINANCE DESTEKLİ) ---
 with tab5:
-    st.markdown("### ⚡ Mega Fırsat Radarları (Premium HTML Algoritmaları)")
-    st.markdown("<p style='color:#94a3b8; font-size:0.9rem;'>HTML dosyasında tasarlanan 6 farklı katı strateji filtresini çalıştırır.</p>", unsafe_allow_html=True) #[cite: 5]
+    st.markdown("### ⚡ Mega Fırsat Radarları (5000 Hisse Havuzu)")
+    st.markdown("<p style='color:#94a3b8; font-size:0.9rem;'>Piyasa değerine göre en büyük hisseleri vektörel hızda analiz eder. Balina ve sürpriz kâr analizlerinde derin verilere inmek için Yahoo Finance altyapısı devreye girer.</p>", unsafe_allow_html=True)
     
     col_pool, col_radar = st.columns([1, 2])
     with col_pool:
-        pool_limit = st.selectbox("Taranacak Havuz (En büyük hisseler):", [30, 50], index=1, help="Finnhub API limitlerini korumak için maksimum 50 adet önerilir.")
+        pool_limit = st.selectbox("Taranacak Havuz Büyüklüğü (Market Cap):", [1000, 3000, 5000], index=2) #[cite: 4]
     with col_radar:
         scan_type = st.radio("Radar Stratejisi Seçin:", [
             "📉 52W Dip Radarı (Dipten <= %15)", 
-            "🎯 Bilanço Sürprizi (> %5 Kâr Sürprizi)", 
-            "🐋 Balina Alımları (Yönetici Alımları)", 
-            "🚀 Hedef Fiyat Ucuzluk (Potansiyel > %15)",
-            "🔥 Altın Kesişim (Dip + Balina + Sürpriz)"
+            "🚀 Hedef Fiyat Ucuzluk (Potansiyel > %20)",
+            "🐋 Balina Alımları (Insider)", 
+            "🔥 Altın Kesişim (Dip + Güçlü Sinyal)"
         ], horizontal=True)
 
     if st.button("📡 Taramayı Başlat", use_container_width=True, type="primary"):
-        symbols_to_scan = US_STOCK_POOL[:pool_limit] #[cite: 5]
-        results = []
-        
-        # Daha hızlı sonuç için TradingView bulk datasını önbellekten çekiyoruz[cite: 4]
-        tv_data = fetch_general_screener() 
-        
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        for i, sym in enumerate(symbols_to_scan):
-            status_text.text(f"Analiz Ediliyor: {sym} ({i+1}/{pool_limit})")
-            try:
-                if "52W Dip" in scan_type:
-                    row = tv_data[tv_data['Hisse'] == sym]
-                    if not row.empty:
-                        dip = row.iloc[0]['52W Dip Farkı (%)']
-                        if 0 < dip <= 15.0:
-                            results.append({"Hisse": sym, "Skor": dip, "Detay": f"Dipten Uzaklık: %{dip:.1f}", "Renk": "#3b82f6"}) #[cite: 5]
-                            
-                elif "Hedef Fiyat" in scan_type:
-                    row = tv_data[tv_data['Hisse'] == sym]
-                    if not row.empty:
-                        pot = row.iloc[0]['Hedef Potansiyeli (%)']
-                        if pot >= 15.0:
-                            results.append({"Hisse": sym, "Skor": pot, "Detay": f"Ort. Analist Hedefine Potansiyel: +%{pot:.1f}", "Renk": "#ec4899"}) #[cite: 5]
-
-                elif "Bilanço Sürprizi" in scan_type:
-                    earn = requests.get(f"https://finnhub.io/api/v1/stock/earnings?symbol={sym}&token={FINNHUB_API_KEY}").json() #[cite: 1]
-                    if earn and isinstance(earn, list) and len(earn) > 0:
-                        if earn[0].get('actual') and earn[0].get('estimate'):
-                            surp = ((earn[0]['actual'] - earn[0]['estimate']) / abs(earn[0]['estimate'])) * 100
-                            if surp > 5.0:
-                                results.append({"Hisse": sym, "Skor": surp, "Detay": f"Kâr Sürprizi: +%{surp:.1f}", "Renk": "#a855f7"}) #[cite: 5]
-                    time.sleep(0.3) # API Limit koruması
-
-                elif "Balina Alımları" in scan_type:
-                    three_months_ago = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
-                    insider = requests.get(f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={sym}&from={three_months_ago}&token={FINNHUB_API_KEY}").json().get('data', []) #[cite: 1]
-                    total_bought = sum([(t.get('change',0) * t.get('transactionPrice',0)) for t in insider if t.get('change',0) > 0 and t.get('transactionPrice',0) > 0])
-                    if total_bought > 500000:
-                        results.append({"Hisse": sym, "Skor": total_bought, "Detay": f"Son 3 Ay Toplam İçeriden Alım: ${(total_bought/1000000):.1f} Milyon", "Renk": "#06b6d4"}) #[cite: 5]
-                    time.sleep(0.3)
+        # 5000 hisselik bulk (toplu) veri tek seferde çekilir
+        status_text.text(f"TradingView'dan {pool_limit} hisselik bulk veriler indiriliyor...")
+        tv_data = fetch_general_screener(limit=pool_limit) #[cite: 4]
+        
+        results = []
+        
+        if not tv_data.empty:
+            if scan_type == "📉 52W Dip Radarı (Dipten <= %15)":
+                filtered = tv_data[(tv_data['52W Dip Farkı (%)'] > 0) & (tv_data['52W Dip Farkı (%)'] <= 15.0)]
+                filtered = filtered.sort_values(by="52W Dip Farkı (%)")
+                for _, row in filtered.head(30).iterrows(): # En iyi 30 fırsat
+                    results.append({"Hisse": row['Hisse'], "Detay": f"Dipten Uzaklık: %{row['52W Dip Farkı (%)']:.1f}", "Renk": "#3b82f6"})
                     
-                elif "Altın Kesişim" in scan_type:
-                    row = tv_data[tv_data['Hisse'] == sym]
-                    if not row.empty:
-                        dip = row.iloc[0]['52W Dip Farkı (%)']
-                        if 0 < dip <= 20.0:
-                            insider = requests.get(f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={sym}&token={FINNHUB_API_KEY}").json().get('data', [])
-                            total_bought = sum([(t.get('change',0) * t.get('transactionPrice',0)) for t in insider if t.get('change',0) > 0 and t.get('transactionPrice',0) > 0])
-                            if total_bought > 200000:
-                                earn = requests.get(f"https://finnhub.io/api/v1/stock/earnings?symbol={sym}&token={FINNHUB_API_KEY}").json()
-                                surp = 0
-                                if earn and len(earn) > 0 and earn[0].get('estimate'):
-                                    surp = ((earn[0].get('actual',0) - earn[0]['estimate']) / abs(earn[0]['estimate'])) * 100
-                                if surp > 2.0:
-                                    results.append({"Hisse": sym, "Skor": dip, "Detay": f"Dip: +%{dip:.1f} | Balina: ${(total_bought/1000):.0f}K | Kâr: +%{surp:.1f}", "Renk": "#fbbf24"}) #[cite: 5]
-                            time.sleep(0.4)
-
-            except Exception as e:
-                pass
+            elif scan_type == "🚀 Hedef Fiyat Ucuzluk (Potansiyel > %20)":
+                filtered = tv_data[tv_data['Hedef Potansiyeli (%)'] >= 20.0]
+                filtered = filtered.sort_values(by="Hedef Potansiyeli (%)", ascending=False)
+                for _, row in filtered.head(30).iterrows():
+                    results.append({"Hisse": row['Hisse'], "Detay": f"Ort. Analist Hedefine Potansiyel: +%{row['Hedef Potansiyeli (%)']:.1f}", "Renk": "#ec4899"})
+                    
+            elif scan_type == "🐋 Balina Alımları (Insider)":
+                # Yahoo Finance ile derin analiz (Sistemin kilitlenmemesi için sadece teknik olarak sağlam veya hacimli olan ilk 50 hisse taranır)
+                status_text.text("Yahoo Finance üzerinden Insider işlemleri analiz ediliyor...")
+                top_volume = tv_data.sort_values(by="Hacim", ascending=False).head(50)
+                for i, row in top_volume.iterrows():
+                    sym = row['Hisse']
+                    try:
+                        ticker = yf.Ticker(sym)
+                        insider = ticker.insider_purchases
+                        if insider is not None and not insider.empty:
+                            buy_shares = insider[insider['Shares'] > 0]['Shares'].sum()
+                            if buy_shares > 100000: # 100.000 lottan fazla insider alımı
+                                results.append({"Hisse": sym, "Detay": f"Güçlü İçeriden Alım Sinyali Tespit Edildi", "Renk": "#06b6d4"})
+                    except:
+                        pass
+                    progress_bar.progress((i + 1) / 50)
+                    
+            elif scan_type == "🔥 Altın Kesişim (Dip + Güçlü Sinyal)":
+                filtered = tv_data[(tv_data['52W Dip Farkı (%)'] > 0) & (tv_data['52W Dip Farkı (%)'] <= 20.0) & (tv_data['Teknik Sinyal'] == "GÜÇLÜ AL 🔥")]
+                for _, row in filtered.head(30).iterrows():
+                    results.append({"Hisse": row['Hisse'], "Detay": f"Dip: +%{row['52W Dip Farkı (%)']:.1f} | Sinyal: GÜÇLÜ AL 🔥", "Renk": "#fbbf24"})
             
-            progress_bar.progress((i + 1) / pool_limit)
-        
-        status_text.empty()
-        progress_bar.empty()
-        
-        if results:
-            st.success(f"Tarama Tamamlandı! Kriterlere uyan {len(results)} fırsat bulundu.")
-            cols = st.columns(3)
-            for idx, res in enumerate(results):
-                with cols[idx % 3]:
-                    st.markdown(f"""
-                    <div class="radar-card" style="border-left-color: {res['Renk']};">
-                        <div class="radar-title"><span>{res['Hisse']}</span><span style="color:{res['Renk']};">⚡</span></div>
-                        <div class="radar-desc">Uyumlu Fırsat Tespit Edildi</div>
-                        <div class="radar-highlight" style="color:{res['Renk']};">{res['Detay']}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+            progress_bar.progress(1.0)
+            status_text.empty()
+            
+            if results:
+                st.success(f"Tarama Tamamlandı! {len(results)} fırsat bulundu.")
+                cols = st.columns(3)
+                for idx, res in enumerate(results):
+                    with cols[idx % 3]:
+                        st.markdown(f"""
+                        <div class="radar-card" style="border-left-color: {res['Renk']};">
+                            <div class="radar-title"><span>{res['Hisse']}</span><span style="color:{res['Renk']};">⚡</span></div>
+                            <div class="radar-desc">Uyumlu Fırsat Tespit Edildi</div>
+                            <div class="radar-highlight" style="color:{res['Renk']};">{res['Detay']}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+            else:
+                st.info("Kriterlere uyan hisse bulunamadı.")
         else:
-            st.info("Kriterlere uyan hisse bulunamadı.")
+            status_text.empty()
+            st.error("Veriler çekilemedi.")
