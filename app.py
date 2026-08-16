@@ -62,7 +62,7 @@ FINNHUB_API_KEY = "c94i99aad3if4j50rvn0"
 MARKETS_CONFIG = {
     "🇹🇷 BIST (Türkiye)": {"tv_market": "turkey", "yf_suffix": ".IS", "tv_prefix": "BIST:", "is_crypto": False},
     "🇺🇸 ABD (Borsaları)": {"tv_market": "america", "yf_suffix": "", "tv_prefix": "", "is_crypto": False},
-    "🌍 Kripto (KuCoin)": {"tv_market": "crypto", "yf_suffix": "", "tv_prefix": "KUCOIN:", "is_crypto": True}, #[cite: 7]
+    "🌍 Kripto (KuCoin)": {"tv_market": "crypto", "yf_suffix": "", "tv_prefix": "KUCOIN:", "is_crypto": True},
 }
 
 TF_CONFIG = {
@@ -78,8 +78,9 @@ def get_nlp_engine():
     analyzer.lexicon.update(lexicon)
     return analyzer
 
+# BUG FIX: Fonksiyon adı fetch_tv_symbols yerine get_tv_symbols olarak düzeltildi.
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_tv_symbols(tv_market: str, limit: int = 200):
+def get_tv_symbols(tv_market: str, limit: int = 200):
     url = f"https://scanner.tradingview.com/{tv_market}/scan"
     payload = {
         "filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}],
@@ -100,7 +101,7 @@ def fetch_tv_symbols(tv_market: str, limit: int = 200):
 def get_crypto_symbols(limit: int):
     try:
         tickers = ccxt.kucoin().fetch_tickers()
-        valid = [(s, d.get('quoteVolume', 0)) for s, d in tickers.items() if s.endswith('/USDT') and ':' not in s and s not in ['USDC/USDT', 'FDUSD/USDT', 'TUSD/USDT', 'BUSD/USDT']] #[cite: 7]
+        valid = [(s, d.get('quoteVolume', 0)) for s, d in tickers.items() if s.endswith('/USDT') and ':' not in s and s not in ['USDC/USDT', 'FDUSD/USDT', 'TUSD/USDT', 'BUSD/USDT']]
         valid.sort(key=lambda x: x[1], reverse=True)
         return [x[0] for x in valid[:limit]]
     except: return []
@@ -119,20 +120,20 @@ def fetch_single_ccxt(symbol, timeframe, limit=1000):
     except: return symbol, None
 
 # =============================================================================
-# 3. FİBONACCİ GOLDEN ZONE MOTORU (Kaynak 6)
+# 3. FİBONACCİ GOLDEN ZONE MOTORU 
 # =============================================================================
 def wilder_atr(df: pd.DataFrame, length: int = 14) -> np.ndarray:
     high, low, close = df["high"].values.astype(float), df["low"].values.astype(float), df["close"].values.astype(float)
     prev_close = np.roll(close, 1)
     prev_close[0] = np.nan
-    tr = np.nanmax(np.vstack([high - low, np.abs(high - prev_close), np.abs(low - prev_close)]), axis=0) #[cite: 6]
+    tr = np.nanmax(np.vstack([high - low, np.abs(high - prev_close), np.abs(low - prev_close)]), axis=0)
     return pd.Series(tr).ewm(alpha=1.0 / length, adjust=False, min_periods=length).mean().values
 
 def detect_pivots(df: pd.DataFrame, left: int, right: int):
     window = left + right + 1
     high, low = df["high"], df["low"]
     rm_high, rm_low = high.rolling(window, min_periods=window).max(), low.rolling(window, min_periods=window).min()
-    return high.where(high == rm_high.shift(-right)).values, low.where(low == rm_low.shift(-right)).values #[cite: 6]
+    return high.where(high == rm_high.shift(-right)).values, low.where(low == rm_low.shift(-right)).values
 
 def run_fib_strategy(df: pd.DataFrame, left=15, right=5, g_low=0.5, g_up=0.618, inv_atr=0.3, zz_atr=1.5):
     n = len(df)
@@ -178,7 +179,7 @@ def run_fib_strategy(df: pd.DataFrame, left=15, right=5, g_low=0.5, g_up=0.618, 
             elif zzP1 is None: zzP1, zzX1, zzD1, zzLow, isZigZagLow = usePL, lastPLx, -1, usePL, True
             elif abs(usePL - zzP1) >= zzMinLeg: zzP0, zzX0, zzP1, zzX1, zzD1, zzPrevLow, zzLow, zzLegEvent, isZigZagLow = zzP1, zzX1, usePL, lastPLx, -1, zzLow, usePL, True, True
 
-        if isZigZagLow: trailing_stop = zzLow - inv_atr * (atr[i] if not np.isnan(atr[i]) else 0.0) #[cite: 6]
+        if isZigZagLow: trailing_stop = zzLow - inv_atr * (atr[i] if not np.isnan(atr[i]) else 0.0)
 
         validLeg = (zzD1 != 0) and (zzP0 is not None) and (zzP1 is not None) and (zzP0 != zzP1)
         legBull = (zzD1 == 1)
@@ -201,7 +202,7 @@ def run_fib_strategy(df: pd.DataFrame, left=15, right=5, g_low=0.5, g_up=0.618, 
                 zone_top_arr[i], zone_bot_arr[i] = gTop, gBot
                 
                 prevInside = (not np.isnan(close[i - 1])) and (close[i - 1] <= gTop) and (close[i - 1] >= gBot) if i > 0 else False
-                if aBull and (low[i] <= gTop) and (close[i] > gTop) and (close[i] > openp[i]) and (aBornBar is not None) and (i > aBornBar) and not aRejected: #[cite: 6]
+                if aBull and (low[i] <= gTop) and (close[i] > gTop) and (close[i] > openp[i]) and (aBornBar is not None) and (i > aBornBar) and not aRejected:
                     aRejected, evBullRej = True, True
 
         longEnterSig = evBullRej or isZigZagLow
@@ -219,22 +220,22 @@ def run_fib_strategy(df: pd.DataFrame, left=15, right=5, g_low=0.5, g_up=0.618, 
     }
 
 # =============================================================================
-# 4. ÇOKLU ALGORİTMİK MOTOR (Kaynak 7)
+# 4. ÇOKLU ALGORİTMİK MOTOR 
 # =============================================================================
 def run_lrc_strategy(df, lrc_len=9, wma_len=9, smma_len=21):
-    df['LRC'] = ta.linreg(df['close'], length=lrc_len) #[cite: 7]
-    df['WMA'] = ta.wma(df['close'], length=wma_len) #[cite: 7]
-    df['SMMA'] = df['close'].ewm(alpha=1.0/smma_len, adjust=False).mean() #[cite: 7]
+    df['LRC'] = ta.linreg(df['close'], length=lrc_len)
+    df['WMA'] = ta.wma(df['close'], length=wma_len)
+    df['SMMA'] = df['close'].ewm(alpha=1.0/smma_len, adjust=False).mean()
 
     df['Net_AL'] = (df['LRC'] > df['WMA']) & (df['WMA'] > df['SMMA']) & ~((df['LRC'].shift(1) > df['WMA'].shift(1)) & (df['WMA'].shift(1) > df['SMMA'].shift(1)))
     return df
 
 def run_wma_triple_strategy(df, p1=14, p2=21, p3=35):
-    df['WMA1'] = ta.wma(df['close'], length=p1) #[cite: 7]
-    df['WMA2'] = ta.wma(df['close'], length=p2) #[cite: 7]
-    df['WMA3'] = ta.wma(df['close'], length=p3) #[cite: 7]
+    df['WMA1'] = ta.wma(df['close'], length=p1)
+    df['WMA2'] = ta.wma(df['close'], length=p2)
+    df['WMA3'] = ta.wma(df['close'], length=p3)
     
-    kisa_yukari_kesti_orta = (df['WMA1'].shift(1) < df['WMA2'].shift(1)) & (df['WMA1'] > df['WMA2']) #[cite: 7]
+    kisa_yukari_kesti_orta = (df['WMA1'].shift(1) < df['WMA2'].shift(1)) & (df['WMA1'] > df['WMA2'])
     orta_uzun_uzerinde = df['WMA2'] > df['WMA3']
     df['Net_AL'] = kisa_yukari_kesti_orta & orta_uzun_uzerinde
     
@@ -242,8 +243,8 @@ def run_wma_triple_strategy(df, p1=14, p2=21, p3=35):
     df['RSI'] = ta.rsi(df['close'], length=14)
     
     fiyat_wma_yakin = (abs(df['close'] - df['WMA1']) / df['WMA1'] * 100) < 1.5
-    hacim_patlamasi = df['volume'] > (df['Vol_SMA'] * 2.5) #[cite: 7]
-    df['Roket_Adayi'] = orta_uzun_uzerinde & fiyat_wma_yakin & hacim_patlamasi & (df['RSI'] > 50) #[cite: 7]
+    hacim_patlamasi = df['volume'] > (df['Vol_SMA'] * 2.5)
+    df['Roket_Adayi'] = orta_uzun_uzerinde & fiyat_wma_yakin & hacim_patlamasi & (df['RSI'] > 50)
     
     return df
 
@@ -264,17 +265,16 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 # --- SEKME 1: ÇEKİRDEK (DOKUNULMAZ ALAN) ---
 with tab1:
     st.markdown("##### Kazanç Takvimi ve Temel Analiz")
-    # Kodun bu kısmı mimari gereği pasif yer tutucu, veri çekimi 1. Tab için izole.
     st.info("Çekirdek Earnings modülü çalışıyor.")
 
 # --- SEKME 2: KURUMSAL TARAYICI ---
 with tab2:
     st.info("Kurumsal Piyasa Tarayıcı modülü çalışıyor.")
 
-# --- SEKME 3: FIBONACCI GOLDEN ZONE (Kaynak 6) ---
+# --- SEKME 3: FIBONACCI GOLDEN ZONE ---
 with tab3:
     st.markdown("### 📉 Fibonacci Golden Zone Tarayıcı")
-    st.caption("Pine Script v6 adaptasyonu. AL noktası ve Golden Zone testlerini analiz eder.") #[cite: 6]
+    st.caption("Pine Script v6 adaptasyonu. AL noktası ve Golden Zone testlerini analiz eder.")
     
     with st.expander("⚙️ Fibonacci Tarama Ayarları", expanded=True):
         col1, col2, col3 = st.columns(3)
@@ -316,20 +316,17 @@ with tab3:
                             df = batch_data[y_tick].copy() if len(symbols) > 1 else batch_data.copy()
                             df.columns = [c.lower() for c in df.columns]
                             
-                        if df is None or len(df.dropna()) < 80: continue #[cite: 6]
+                        if df is None or len(df.dropna()) < 80: continue
                         df = df.dropna()
                         
                         res = run_fib_strategy(df)
                         window_start = max(0, len(df) - fib_recency)
                         price = float(df['close'].iloc[-1])
                         
-                        # 1. Yeni AL Sinyali[cite: 6]
                         if res["long_entry"][window_start:].any():
                             fresh_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🟢 YENİ ALIM", "Stop": res["final_trailing_stop"]})
-                        # 2. Ekleme Sinyali[cite: 6]
                         elif res["addon_signal"][window_start:].any():
                             addon_res.append({"Varlık": sym, "Fiyat": price, "Durum": "➕ EKLEME NOKTASI"})
-                        # 3. Pusu / Yaklaşan[cite: 6]
                         elif not res["final_position"] and res["final_zone"]["set"] and res["final_zone"]["bull"]:
                             rng = res["final_zone"]["high"] - res["final_zone"]["low"]
                             gTop = res["final_zone"]["high"] - 0.5 * rng
@@ -345,17 +342,17 @@ with tab3:
                 with col_r3: st.markdown("##### ➕ Ekleme"); st.dataframe(pd.DataFrame(addon_res), use_container_width=True, hide_index=True)
 
 
-# --- SEKME 4: ÇOKLU ALGORİTMİK TARAMA (Kaynak 7) ---
+# --- SEKME 4: ÇOKLU ALGORİTMİK TARAMA ---
 with tab4:
     st.markdown("### ⚡ Kantitatif Trend & Sinyal Motoru")
-    st.caption("LRC / WMA / SMMA ve Üçlü WMA (14-21-35) Kesişim algoritmaları.") #[cite: 7]
+    st.caption("LRC / WMA / SMMA ve Üçlü WMA (14-21-35) Kesişim algoritmaları.")
     
     with st.expander("⚙️ Algoritma Ayarları", expanded=True):
         col1, col2 = st.columns(2)
         algo_mkt = col1.selectbox("Piyasa", list(MARKETS_CONFIG.keys()), key="algo_mkt")
         algo_tf = col2.selectbox("Zaman Dilimi", list(TF_CONFIG.keys()), index=2, key="algo_tf")
         
-        sel_algo = st.radio("Kullanılacak Algoritma:", ["1️⃣ LRC + WMA + SMMA", "2️⃣ Üçlü WMA (14-21-35)"], horizontal=True) #[cite: 7]
+        sel_algo = st.radio("Kullanılacak Algoritma:", ["1️⃣ LRC + WMA + SMMA", "2️⃣ Üçlü WMA (14-21-35)"], horizontal=True)
         algo_limit = st.number_input("Taranacak Varlık Sayısı", 50, 500, 100, 50, key="algo_limit")
         algo_recency = st.slider("Sinyal Tazeliği (Son X Mum)", 1, 10, 3, key="algo_rec")
         run_algo_btn = st.button("🚀 Algoritmik Taramayı Başlat", type="primary", use_container_width=True)
@@ -392,16 +389,16 @@ with tab4:
                         if df is None or len(df.dropna()) < 50: continue
                         df = df.dropna()
                         
-                        if sel_algo.startswith("1"): df = run_lrc_strategy(df) #[cite: 7]
-                        else: df = run_wma_triple_strategy(df) #[cite: 7]
+                        if sel_algo.startswith("1"): df = run_lrc_strategy(df)
+                        else: df = run_wma_triple_strategy(df)
                         
                         window_start = max(0, len(df) - algo_recency)
                         price = float(df['close'].iloc[-1])
                         
                         if df['Net_AL'].iloc[window_start:].any():
-                            algo_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🔥 NET ALIM"}) #[cite: 7]
+                            algo_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🔥 NET ALIM"})
                         elif sel_algo.startswith("2") and df.get('Roket_Adayi', pd.Series(False)).iloc[window_start:].any():
-                            algo_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🚀 ROKET ADAYI"}) #[cite: 7]
+                            algo_res.append({"Varlık": sym, "Fiyat": price, "Durum": "🚀 ROKET ADAYI"})
                         
                     except: pass
                 pb.empty()
