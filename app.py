@@ -21,10 +21,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Tab-1 Çekirdek Haber Hafızası
-if "core_news_cache" not in st.session_state:
-    st.session_state.core_news_cache = {}
-
 # Tab-2 Kurumsal Tarayıcı Hafızası
 if "tab2_scanned" not in st.session_state:
     st.session_state.tab2_scanned = False
@@ -55,6 +51,7 @@ st.markdown("""
     .quant-card-value { font-size: 1.6rem; color: #ffffff; font-weight: 900; letter-spacing: -0.5px; }
     .badge-bullish { background: rgba(0, 200, 83, 0.15); color: var(--accent-green); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(0, 200, 83, 0.3); }
     .badge-bearish { background: rgba(213, 0, 0, 0.15); color: var(--accent-red); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(213, 0, 0, 0.3); }
+    .badge-neutral { background: rgba(148, 163, 184, 0.15); color: var(--text-muted); padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; border: 1px solid rgba(148, 163, 184, 0.3); }
     .info-box { background: rgba(41, 98, 255, 0.1); border-left: 4px solid var(--accent-blue); padding: 12px; margin-bottom: 16px; border-radius: 4px; font-size: 0.9rem; line-height: 1.5; }
     div[data-testid="stMetricValue"] > div { font-size: 1.4rem !important; font-weight: 800 !important; white-space: normal !important; }
     div[data-testid="stMetricLabel"] { font-size: 0.8rem !important; color: var(--text-muted) !important; text-transform: uppercase; }
@@ -75,84 +72,94 @@ def get_nlp_engine():
     return analyzer
 
 def fetch_core_earnings(terminal_ui):
-    terminal_ui.code("[*] TradingView Kazanç Takvimi ve Hedef Fiyat API'sine bağlanılıyor...\n", language="bash")
+    terminal_ui.code("[*] TradingView Kazanç Takvimi API'sine bağlanılıyor...\n", language="bash")
     time.sleep(0.5)
-    url = "https://scanner.tradingview.com/america/scan"
+    url = "https://scanner.tradingview.com/america/scan?label-product=calendar-earnings"
     now = int(time.time())
     one_month_later = now + (30 * 24 * 60 * 60)
     
-    # TV'den bilançosu yaklaşan EN BÜYÜK 25 hisseyi ve analist hedeflerini çekiyoruz
     payload = {
         "filter": [
             {"left": "earnings_release_next_date", "operation": "in_range", "right": [now, one_month_later]}, 
             {"left": "earnings_per_share_forecast_next_fq", "operation": "greater", "right": 0}
         ],
         "markets": ["america"],
-        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic", "close", "price_target_price_mean"],
-        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
-        "range": [0, 25] # Hızlı haber taraması için limit 25
+        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic"],
+        "sort": {"sortBy": "earnings_release_next_date", "sortOrder": "asc"},
+        "range": [0, 5000] 
     }
-    
-    analyzer = get_nlp_engine()
-    st.session_state.core_news_cache = {}
     
     try:
         resp = requests.post(url, json=payload)
+        terminal_ui.code(f"[*] Sunucu Yanıtı: {resp.status_code}\n[*] Veriler işleniyor...\n", language="bash")
         if resp.status_code == 200:
             data = resp.json().get('data', [])
-            terminal_ui.code(f"[*] TradingView'dan {len(data)} büyük hisse alındı.\n[*] Finnhub üzerinden her hisse için NLP Haber Analizi başlatılıyor...\n", language="bash")
+            def sort_key(x):
+                d = x['d']
+                ts = d[2]
+                day_timestamp = ts - (ts % 86400)
+                m_cap = d[3] if d[3] is not None else 0
+                return (day_timestamp, -m_cap)
+            data.sort(key=sort_key)
             
             parsed = []
-            start_date = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
-            end_date = datetime.now().strftime('%Y-%m-%d')
-            
-            for i, item in enumerate(data):
-                sym = item['s'].split(':')[-1]
+            for item in data:
                 d = item['d']
-                eps, date_ts, mcap, close, target_mean = d[1], d[2], d[3] or 0, d[4], d[5]
-                
-                m_cap_str = f"${mcap/1e9:.2f}B" if mcap >= 1e9 else (f"${mcap/1e6:.2f}M" if mcap >= 1e6 else f"${mcap:.2f}")
-                target_str = f"${target_mean:.2f}" if target_mean else "Belirsiz"
-                
-                # Haberleri Çek ve Analiz Et
-                news_count = 0
-                signal_str = "NÖTR ⚖️"
-                
-                try:
-                    news_url = f"https://finnhub.io/api/v1/company-news?symbol={sym}&from={start_date}&to={end_date}&token={FINNHUB_API_KEY}"
-                    news_data = requests.get(news_url).json()
-                    
-                    if news_data and isinstance(news_data, list):
-                        news_count = len(news_data)
-                        st.session_state.core_news_cache[sym] = news_data[:5] # Detay paneli için son 5 haberi kaydet
-                        
-                        if news_count > 0:
-                            # Son haberin duygusal skoru
-                            latest_score = analyzer.polarity_scores(news_data[0]['headline'])['compound']
-                            if latest_score >= 0.15: signal_str = "AL 🚀"
-                            elif latest_score <= -0.15: signal_str = "SAT ⚠️"
-                except:
-                    pass
-                
-                # BUG FIX: Eksik Est. EPS ve Market Cap eklendi
+                val = d[3] or 0
+                m_cap_str = f"${val/1e9:.2f}B" if val >= 1e9 else (f"${val/1e6:.2f}M" if val >= 1e6 else f"${val:.2f}")
                 parsed.append({
-                    "Hisse": sym, 
-                    "Fiyat": f"${close:.2f}",
-                    "Est. EPS": eps,
+                    "Hisse": item['s'].split(':')[-1], 
+                    "Est. EPS": d[1], 
+                    "Tarih": time.strftime('%Y-%m-%d', time.localtime(d[2])), 
                     "Market Cap": m_cap_str,
-                    "Analist Hedefi": target_str,
-                    "Tarih": time.strftime('%d-%m-%Y', time.localtime(date_ts)), 
-                    "Haber Adedi": news_count,
-                    "Son Haber Sinyali": signal_str,
-                    "Detaylar": "Aşağıdan Seçin 👇"
+                    "Raw_Cap": val
                 })
-                
-                terminal_ui.code(f"   [{i+1}/{len(data)}] {sym} analiz edildi. Haber: {news_count} | Sinyal: {signal_str}", language="bash")
-                
-            terminal_ui.code(f"\n[+] İşlem Başarılı!\n", language="bash")
+            terminal_ui.code(f"[+] İşlem Başarılı! {len(parsed)} hisse bulundu.\n", language="bash")
             return pd.DataFrame(parsed)
     except Exception as e: 
         terminal_ui.code(f"[!] HATA OLUŞTU: {e}\n", language="bash")
+    return pd.DataFrame()
+
+def fetch_finnhub_analysis(ticker):
+    try:
+        quote = requests.get(f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}").json()
+        metric = requests.get(f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={FINNHUB_API_KEY}").json().get('metric', {})
+        recs = requests.get(f"https://finnhub.io/api/v1/stock/recommendation?symbol={ticker}&token={FINNHUB_API_KEY}").json()
+        insider = requests.get(f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={ticker}&token={FINNHUB_API_KEY}").json().get('data', [])
+
+        curr_price = quote.get('c', 0)
+        low_52 = metric.get('52WeekLow', 0)
+        high_52 = metric.get('52WeekHigh', 0)
+        
+        recs_data = recs[0] if recs else None
+        
+        balina_str = "Yok"
+        if insider:
+            large_buys = [t for t in insider if t.get('share', 0) > 0]
+            if large_buys:
+                last_buy = large_buys[0]
+                balina_str = f"Alım ({(last_buy.get('change', 0)):,} lot | {last_buy['filingDate']})"
+
+        return curr_price, low_52, high_52, recs_data, balina_str
+    except:
+        return 0, 0, 0, None, "Hata"
+
+def fetch_analyst_institutions(ticker):
+    try:
+        res = requests.get(f"https://finnhub.io/api/v1/stock/upgrade-downgrade?symbol={ticker}&token={FINNHUB_API_KEY}").json()
+        if isinstance(res, list) and len(res) > 0:
+            parsed = []
+            for item in res[:15]:
+                date_str = datetime.fromtimestamp(item['gradeTime']).strftime('%Y-%m-%d') if item.get('gradeTime') else '-'
+                parsed.append({
+                    "Kurum (Banka)": item.get('company', '-'),
+                    "Yeni Not": item.get('toGrade', '-'),
+                    "Önceki Not": item.get('fromGrade', '-'),
+                    "Aksiyon": item.get('action', '-').upper(),
+                    "Tarih": date_str
+                })
+            return pd.DataFrame(parsed)
+    except: pass
     return pd.DataFrame()
 
 def fetch_institutional_screener(terminal_ui):
@@ -182,7 +189,6 @@ def fetch_institutional_screener(terminal_ui):
                 dip_farki = ((close - low52) / low52) * 100 if low52 > 0 else 0
                 target_pot = ((target_mean - close) / close) * 100 if close > 0 else 0
                 
-                # Karar Gerekçesi (Neden Alınmalı?) Oluşturma
                 reasons = []
                 if dip_farki <= 10.0: reasons.append("52W Dibe Çok Yakın (Düşük Risk)")
                 if target_pot >= 20.0: reasons.append(f"Analistlere Göre %{target_pot:.0f} İskontolu")
@@ -480,47 +486,89 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📰 Makro Haber & NLP"
 ])
 
-# --- SEKME 1: ÇEKİRDEK KAZANÇ TAKVİMİ ---
+# --- SEKME 1: ÇEKİRDEK (ORİJİNAL DÜZENE DÖNDÜ, ANALİST/HABER EKLENDİ) ---
 with tab1:
-    st.markdown("##### 🎯 Analist Destekli Kazanç Takvimi ve Haber Analizi")
+    st.markdown("##### 🎯 Kazanç Takvimi ve Derin Analiz")
+    st.caption("Orijinal amacına uygun olarak bilançosu yaklaşan şirketleri listeler. Seçilen hisse üzerinde Derin Analiz (Analist Konsensüsü ve NLP Haber Analizi) gerçekleştirir.")
+    
     if st.button("Verileri Çek / Güncelle (Tab-1)"):
         term_ui1 = st.empty()
-        df_core = fetch_core_earnings(term_ui1)
-        if not df_core.empty:
-            c1, c2, c3 = st.columns(3)
-            c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse (Top 25)</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
-            avg_eps = pd.to_numeric(df_core["Est. EPS"], errors='coerce').mean()
-            c2.markdown(f"<div class='quant-card'><div class='quant-card-title'>Ortalama Est. EPS</div><div class='quant-card-value'>${avg_eps:.2f}</div></div>", unsafe_allow_html=True)
-            c3.markdown(f"<div class='quant-card'><div class='quant-card-title'>Tarih Aralığı</div><div class='quant-card-value'>Gelecek 30 Gün</div></div>", unsafe_allow_html=True)
-            
-            st.dataframe(df_core, use_container_width=True, hide_index=True)
-            
-    if st.session_state.core_news_cache:
-        st.write("---")
-        st.markdown("##### 📰 Hisse Haber Detayları")
-        selected_news_ticker = st.selectbox("Tablodaki sinyallere göre işlem yapmak için aşağıdan hisseyi seçip haber detaylarını ve analist beklentilerini görüntüleyin:", list(st.session_state.core_news_cache.keys()))
+        st.session_state.core_df = fetch_core_earnings(term_ui1)
         
-        if selected_news_ticker:
-            news_items = st.session_state.core_news_cache[selected_news_ticker]
-            if news_items:
+    if "core_df" in st.session_state and not st.session_state.core_df.empty:
+        df_core = st.session_state.core_df
+        c1, c2, c3 = st.columns(3)
+        c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
+        avg_eps = pd.to_numeric(df_core["Est. EPS"], errors='coerce').mean()
+        c2.markdown(f"<div class='quant-card'><div class='quant-card-title'>Ortalama Est. EPS</div><div class='quant-card-value'>${avg_eps:.2f}</div></div>", unsafe_allow_html=True)
+        c3.markdown(f"<div class='quant-card'><div class='quant-card-title'>Tarih Aralığı</div><div class='quant-card-value'>Gelecek 30 Gün</div></div>", unsafe_allow_html=True)
+        
+        st.dataframe(df_core.drop(columns=["Raw_Cap"]), use_container_width=True, hide_index=True)
+        
+        st.write("---")
+        st.markdown("### 🐋 Finnhub Derin Analiz (Analist Konsensüsü & NLP Haber)")
+        
+        selected_ticker = st.selectbox("Detaylı analiz edilecek hisseyi seçin:", df_core["Hisse"].tolist())
+        
+        if selected_ticker:
+            with st.spinner(f"{selected_ticker} için derin analiz verileri çekiliyor..."):
+                curr_price, low_52, high_52, recs_data, balina = fetch_finnhub_analysis(selected_ticker)
+                analyst_df = fetch_analyst_institutions(selected_ticker)
+                
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1.metric("Güncel Fiyat", f"${curr_price:.2f}")
+            sc2.metric("52W Dip/Tepe", f"${low_52:.2f} - ${high_52:.2f}")
+            
+            analyst_summary = "Bilinmiyor"
+            if recs_data:
+                total = recs_data.get('buy',0) + recs_data.get('strongBuy',0) + recs_data.get('hold',0) + recs_data.get('sell',0) + recs_data.get('strongSell',0)
+                if total > 0:
+                    buy_pct = ((recs_data.get('buy',0) + recs_data.get('strongBuy',0)) / total) * 100
+                    analyst_summary = f"%{buy_pct:.0f} AL Konsensüsü"
+            sc3.metric("Analist Görüşü", analyst_summary)
+            sc4.metric("Balina / Insider", balina)
+            
+            dip_farki = ((curr_price - low_52) / low_52) * 100 if low_52 > 0 else 0
+            if 0 < dip_farki <= 15: st.success(f"**Katı Teknik Sinyal:** Fiyat 52 haftalık dibe %{dip_farki:.1f} yakınlıkta. Potansiyel ALIM bölgesi.")
+            elif dip_farki > 15: st.warning(f"**Katı Teknik Sinyal:** Fiyat dipten %{dip_farki:.1f} uzaklaşmış durumda.")
+            
+            col_left, col_right = st.columns([1, 1])
+            with col_left:
+                st.markdown("#### 🏦 Hangi Analistler? (Son Kurum Raporları)")[cite: 5]
+                if not analyst_df.empty:
+                    st.dataframe(analyst_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("Kurum raporu bulunamadı.")
+            
+            with col_right:
+                st.markdown("#### 📰 Şirket Haberleri ve Duygu Skoru (Son 1 Hafta)")[cite: 2]
                 analyzer = get_nlp_engine()
-                for item in news_items:
-                    score = analyzer.polarity_scores(item['headline'])['compound']
-                    if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>AL ({score:.2f})</span>"
-                    elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>SAT ({score:.2f})</span>"
-                    else: sentiment_ui = f"<span style='color: var(--text-muted); font-size: 0.75rem; font-weight: bold;'>NÖTR ({score:.2f})</span>"
-                    
-                    st.markdown(f"""
-                    <div class='quant-card' style='padding: 12px;'>
-                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
-                            <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>
-                            {sentiment_ui}
-                        </div>
-                        <div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.info("Bu hisse için son 7 güne ait haber bulunamadı.")
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=7)
+                url = f"https://finnhub.io/api/v1/company-news?symbol={selected_ticker}&from={start_date.strftime('%Y-%m-%d')}&to={end_date.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}"
+                
+                try:
+                    news_res = requests.get(url).json()
+                    if news_res and isinstance(news_res, list):
+                        for item in news_res[:5]: # Son 5 haber
+                            score = analyzer.polarity_scores(item['headline'])['compound']
+                            if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>AL ({score:.2f})</span>"
+                            elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>SAT ({score:.2f})</span>"
+                            else: sentiment_ui = f"<span class='badge-neutral'>NÖTR ({score:.2f})</span>"
+                            
+                            st.markdown(f"""
+                            <div class='quant-card' style='padding: 10px; margin-bottom: 8px;'>
+                                <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
+                                    <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 0.9rem;'>{item['headline']}</a>
+                                    {sentiment_ui}
+                                </div>
+                                <div style='font-size: 0.7rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    else:
+                        st.info("Son 7 güne ait haber bulunamadı.")
+                except:
+                    st.error("Veri akışı sağlanamadı.")
 
 # --- SEKME 2: KURUMSAL TARAYICI ---
 with tab2:
@@ -623,7 +671,7 @@ with tab3:
                 entry_hits = np.where(res["long_entry"][window_start:])[0]
                 if len(entry_hits):
                     entry_idx = window_start + int(entry_hits[-1])
-                    had_prior_exit = bool(np.any(res["long_exit"][:entry_idx]) if "long_exit" in res else False)
+                    had_prior_exit = bool(np.any(res["long_exit"][:entry_idx]))
                     if had_prior_exit or not only_after_sell:
                         sig_type = "🟡 Golden Zone Reddi" if res["entry_from_gz"][entry_idx] else "🔵 ZigZag Dip Onayı"
                         gLow, gTop = _golden_bounds(res["final_zone"], golden_lower, golden_upper)
@@ -801,9 +849,14 @@ with tab4:
 # --- SEKME 5: MAKRO HABER VE DUYGU ANALİZİ ---
 with tab5:
     st.markdown("### 📰 Şirket Haberleri ve Duygu Skoru")
+    
     col_news1, col_news2 = st.columns([3, 1])
-    with col_news1: news_ticker = st.text_input("Haberlerini Çekmek İstediğiniz Hisse Sembolü (Örn: AAPL, MSFT):", "AAPL")
-    with col_news2: st.write(""); st.write(""); run_news = st.button("Haberleri Getir", use_container_width=True)
+    with col_news1:
+        news_ticker = st.text_input("Haberlerini Çekmek İstediğiniz Hisse Sembolü (Örn: AAPL, MSFT):", "AAPL")
+    with col_news2:
+        st.write("") 
+        st.write("")
+        run_news = st.button("Haberleri Getir", use_container_width=True)
         
     if run_news:
         term_ui5 = st.empty()
@@ -812,6 +865,7 @@ with tab5:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=7)
         url = f"https://finnhub.io/api/v1/company-news?symbol={news_ticker}&from={start_date.strftime('%Y-%m-%d')}&to={end_date.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}"
+        
         try:
             news_res = requests.get(url).json()
             if news_res:
@@ -821,6 +875,17 @@ with tab5:
                     if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>POZİTİF ({score:.2f})</span>"
                     elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>NEGATİF ({score:.2f})</span>"
                     else: sentiment_ui = f"<span style='color: var(--text-muted); font-size: 0.75rem; font-weight: bold;'>NÖTR ({score:.2f})</span>"
-                    st.markdown(f"<div class='quant-card' style='padding: 12px;'><div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'><a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>{sentiment_ui}</div><div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div></div>", unsafe_allow_html=True)
-            else: term_ui5.code("[-] Son 7 güne ait majör bir haber bulunamadı.\n", language="bash")
-        except Exception as e: term_ui5.code(f"[!] HATA: Veri akışı sağlanamadı. Nedeni: {e}\n", language="bash")
+                        
+                    st.markdown(f"""
+                    <div class='quant-card' style='padding: 12px;'>
+                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
+                            <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>
+                            {sentiment_ui}
+                        </div>
+                        <div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else: 
+                term_ui5.code("[-] Son 7 güne ait majör bir haber bulunamadı.\n", language="bash")
+        except Exception as e: 
+            term_ui5.code(f"[!] HATA: Veri akışı sağlanamadı. Nedeni: {e}\n", language="bash")
