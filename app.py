@@ -26,13 +26,13 @@ if "tab2_scanned" not in st.session_state:
     st.session_state.tab2_scanned = False
     st.session_state.tab2_df = pd.DataFrame()
 
-# Tab-3 Fibonacci Hafızası (Kaynak 6)
+# Tab-3 Fibonacci Hafızası 
 if 'fresh_results' not in st.session_state: st.session_state.fresh_results = []
 if 'watch_results' not in st.session_state: st.session_state.watch_results = []
 if 'addon_results' not in st.session_state: st.session_state.addon_results = []
 if 'scan_meta' not in st.session_state: st.session_state.scan_meta = {}
 
-# Tab-4 Çoklu Algoritma Hafızası (Kaynak 7)
+# Tab-4 Çoklu Algoritma Hafızası 
 if 'tarama_tamamlandi' not in st.session_state: st.session_state['tarama_tamamlandi'] = False
 if 'sonuclar_hafiza' not in st.session_state: st.session_state['sonuclar_hafiza'] = []
 if 'grafik_hafiza' not in st.session_state: st.session_state['grafik_hafiza'] = {}
@@ -142,25 +142,25 @@ def fetch_institutional_screener(terminal_ui):
     return pd.DataFrame()
 
 # =============================================================================
-# 3. FİBONACCİ GOLDEN ZONE FONKSİYONLARI (KAYNAK 6 - BİREBİR KOPYALANDI)
+# 3. FİBONACCİ GOLDEN ZONE FONKSİYONLARI 
 # =============================================================================
 FIB_MARKET_CONFIGS = {
     "🇹🇷 BIST (Türkiye)": {"tv_market": "turkey", "yf_suffix": ".IS", "tv_prefix": "BIST:"},
     "🇺🇸 ABD (NASDAQ / NYSE)": {"tv_market": "america", "yf_suffix": "", "tv_prefix": ""},
-} #[cite: 6]
+}
 FIB_TIMEFRAME_CONFIGS = {
     "1 Saat (1H)":  {"yf_interval": "60m", "resample": None, "period": "730d", "tv_interval": "60"},
     "2 Saat (2H)":  {"yf_interval": "60m", "resample": "2h", "period": "730d", "tv_interval": "120"},
     "4 Saat (4H)":  {"yf_interval": "60m", "resample": "4h", "period": "730d", "tv_interval": "240"},
     "1 Gün (1D)":   {"yf_interval": "1d",  "resample": None, "period": "5y",  "tv_interval": "D"},
     "1 Hafta (1W)": {"yf_interval": "1wk", "resample": None, "period": "10y", "tv_interval": "W"},
-} #[cite: 6]
-MIN_BARS_REQUIRED = 80 #[cite: 6]
+}
+MIN_BARS_REQUIRED = 80
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def get_market_symbols(tv_market: str, limit: int = 300):
+def get_market_symbols(tv_market: str, limit: int = 5000):
     url = f"https://scanner.tradingview.com/{tv_market}/scan"
-    payload = {"filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}], "options": {"lang": "en"}, "markets": [tv_market], "symbols": {"query": {"types": []}, "tickers": []}, "columns": ["name", "market_cap_basic"], "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"}, "range": [0, limit]} #[cite: 6]
+    payload = {"filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}], "options": {"lang": "en"}, "markets": [tv_market], "symbols": {"query": {"types": []}, "tickers": []}, "columns": ["name", "market_cap_basic"], "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"}, "range": [0, limit]}
     try:
         resp = requests.post(url, json=payload, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
         if resp.status_code == 200: return [item["d"][0] for item in resp.json().get("data", [])]
@@ -168,11 +168,11 @@ def get_market_symbols(tv_market: str, limit: int = 300):
     return []
 
 def _resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
-    return df.resample(rule).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna() #[cite: 6]
+    return df.resample(rule).agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}).dropna()
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_batch(tickers: tuple, yf_interval: str, period: str):
-    try: return yf.download(list(tickers), period=period, interval=yf_interval, group_by="ticker", threads=True, progress=False, auto_adjust=False) #[cite: 6]
+    try: return yf.download(list(tickers), period=period, interval=yf_interval, group_by="ticker", threads=True, progress=False, auto_adjust=False)
     except: return pd.DataFrame()
 
 def extract_symbol_df(batch: pd.DataFrame, yf_ticker: str, single_ticker: bool) -> pd.DataFrame:
@@ -185,25 +185,25 @@ def extract_symbol_df(batch: pd.DataFrame, yf_ticker: str, single_ticker: bool) 
         df.columns = [str(c).lower() for c in df.columns]
         df = df[["open", "high", "low", "close", "volume"]].dropna()
         df.index = pd.to_datetime(df.index)
-        return df #[cite: 6]
+        return df
     except: return None
 
 def wilder_atr(df: pd.DataFrame, length: int = 14) -> np.ndarray:
     high, low, close = df["high"].values.astype(float), df["low"].values.astype(float), df["close"].values.astype(float)
     prev_close = np.roll(close, 1)
     prev_close[0] = np.nan
-    tr = np.nanmax(np.vstack([high - low, np.abs(high - prev_close), np.abs(low - prev_close)]), axis=0) #[cite: 6]
+    tr = np.nanmax(np.vstack([high - low, np.abs(high - prev_close), np.abs(low - prev_close)]), axis=0)
     return pd.Series(tr).ewm(alpha=1.0 / length, adjust=False, min_periods=length).mean().values
 
 def detect_pivots(df: pd.DataFrame, left: int, right: int):
     window = left + right + 1
     high, low = df["high"], df["low"]
     rm_high, rm_low = high.rolling(window, min_periods=window).max(), low.rolling(window, min_periods=window).min()
-    return high.where(high == rm_high.shift(-right)).values, low.where(low == rm_low.shift(-right)).values #[cite: 6]
+    return high.where(high == rm_high.shift(-right)).values, low.where(low == rm_low.shift(-right)).values
 
 def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower: float = 0.5, golden_upper: float = 0.618, inv_buf_atr: float = 0.3, zz_dev_atr: float = 1.5, touch_wick: bool = True, skip_late: bool = True):
     n = len(df)
-    high, low, close, openp = df["high"].values.astype(float), df["low"].values.astype(float), df["close"].values.astype(float), df["open"].values.astype(float) #[cite: 6]
+    high, low, close, openp = df["high"].values.astype(float), df["low"].values.astype(float), df["close"].values.astype(float), df["open"].values.astype(float)
     atr = wilder_atr(df, 14)
     ph_val, pl_val = detect_pivots(df, left, right)
     zzP0 = zzP1 = zzX0 = zzX1 = None
@@ -217,7 +217,7 @@ def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower:
     entry_from_gz, entry_from_zz = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
     addon_signal, addon_from_gz, addon_from_zz = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
     zone_top_arr, zone_bot_arr, zone_bull_arr = np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan)
-    near_ratio = min(golden_lower, golden_upper) #[cite: 6]
+    near_ratio = min(golden_lower, golden_upper)
 
     for i in range(n):
         newPH, newPL = (ph_val[i] if i - right >= 0 else np.nan), (pl_val[i] if i - right >= 0 else np.nan)
@@ -296,7 +296,7 @@ def run_strategy(df: pd.DataFrame, left: int = 15, right: int = 5, golden_lower:
         entry_positions = np.where(long_entry)[0]
         if len(entry_positions): open_entry_idx = int(entry_positions[-1])
 
-    return {"long_entry": long_entry, "long_exit": long_exit, "entry_from_gz": entry_from_gz, "entry_from_zz": entry_from_zz, "addon_signal": addon_signal, "addon_from_gz": addon_from_gz, "addon_from_zz": addon_from_zz, "zone_top": zone_top_arr, "zone_bot": zone_bot_arr, "zone_bull": zone_bull_arr, "final_position": position, "open_entry_idx": open_entry_idx, "final_zone": {"bull": aBull, "high": aHigh, "low": aLow, "set": aSet, "alive": aAlive, "rejected": aRejected}, "final_trailing_stop": trailing_stop, "atr": atr} #[cite: 6]
+    return {"long_entry": long_entry, "long_exit": long_exit, "entry_from_gz": entry_from_gz, "entry_from_zz": entry_from_zz, "addon_signal": addon_signal, "addon_from_gz": addon_from_gz, "addon_from_zz": addon_from_zz, "zone_top": zone_top_arr, "zone_bot": zone_bot_arr, "zone_bull": zone_bull_arr, "final_position": position, "open_entry_idx": open_entry_idx, "final_zone": {"bull": aBull, "high": aHigh, "low": aLow, "set": aSet, "alive": aAlive, "rejected": aRejected}, "final_trailing_stop": trailing_stop, "atr": atr}
 
 def _golden_bounds(fz, g_lower, g_upper):
     if not fz["set"] or fz["high"] is None or fz["low"] is None: return np.nan, np.nan
@@ -304,46 +304,46 @@ def _golden_bounds(fz, g_lower, g_upper):
     if rng <= 0: return np.nan, np.nan
     gA = fz["high"] - g_lower * rng if fz["bull"] else fz["low"] + g_lower * rng
     gB = fz["high"] - g_upper * rng if fz["bull"] else fz["low"] + g_upper * rng
-    return min(gA, gB), max(gA, gB) #[cite: 6]
+    return min(gA, gB), max(gA, gB)
 
 def build_chart(df: pd.DataFrame, res: dict, symbol: str, tf_label: str, show_bars: int = 250):
     n = len(df); show_n = min(show_bars, n); d = df.iloc[-show_n:]; idx0 = n - show_n
     fig = go.Figure()
-    fig.add_trace(go.Candlestick(x=d.index, open=d["open"], high=d["high"], low=d["low"], close=d["close"], name=symbol, increasing_line_color="#10b981", decreasing_line_color="#ef4444")) #[cite: 6]
+    fig.add_trace(go.Candlestick(x=d.index, open=d["open"], high=d["high"], low=d["low"], close=d["close"], name=symbol, increasing_line_color="#10b981", decreasing_line_color="#ef4444"))
     entries = np.where(res["long_entry"][idx0:])[0]
     exits = np.where(res["long_exit"][idx0:])[0]
-    if len(entries): fig.add_trace(go.Scatter(x=d.index[entries], y=d["low"].values[entries] * 0.99, mode="markers", marker=dict(symbol="triangle-up", size=13, color="#22c55e", line=dict(width=1, color="white")), name="AL")) #[cite: 6]
-    if len(exits): fig.add_trace(go.Scatter(x=d.index[exits], y=d["high"].values[exits] * 1.01, mode="markers", marker=dict(symbol="triangle-down", size=13, color="#ef4444", line=dict(width=1, color="white")), name="SAT")) #[cite: 6]
+    if len(entries): fig.add_trace(go.Scatter(x=d.index[entries], y=d["low"].values[entries] * 0.99, mode="markers", marker=dict(symbol="triangle-up", size=13, color="#22c55e", line=dict(width=1, color="white")), name="AL"))
+    if len(exits): fig.add_trace(go.Scatter(x=d.index[exits], y=d["high"].values[exits] * 1.01, mode="markers", marker=dict(symbol="triangle-down", size=13, color="#ef4444", line=dict(width=1, color="white")), name="SAT"))
     fz = res["final_zone"]
     if fz["set"] and fz["high"] is not None and fz["low"] is not None:
         rng = fz["high"] - fz["low"]
         if rng > 0:
             gA, gB = (fz["high"] - 0.5 * rng if fz["bull"] else fz["low"] + 0.5 * rng), (fz["high"] - 0.618 * rng if fz["bull"] else fz["low"] + 0.618 * rng)
-            fig.add_hrect(y0=min(gA, gB), y1=max(gA, gB), fillcolor="rgba(217,119,6,0.18)", line_width=1, line_color="rgba(217,119,6,0.6)", annotation_text="GOLDEN ZONE", annotation_position="top left") #[cite: 6]
+            fig.add_hrect(y0=min(gA, gB), y1=max(gA, gB), fillcolor="rgba(217,119,6,0.18)", line_width=1, line_color="rgba(217,119,6,0.6)", annotation_text="GOLDEN ZONE", annotation_position="top left")
     ts = res.get("final_trailing_stop", np.nan)
-    if not np.isnan(ts): fig.add_hline(y=ts, line_dash="dot", line_color="#facc15", annotation_text="Trailing Stop") #[cite: 6]
-    fig.update_layout(template="plotly_dark", height=620, xaxis_rangeslider_visible=False, title=f"{symbol} — {tf_label}", margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)) #[cite: 6]
+    if not np.isnan(ts): fig.add_hline(y=ts, line_dash="dot", line_color="#facc15", annotation_text="Trailing Stop")
+    fig.update_layout(template="plotly_dark", height=620, xaxis_rangeslider_visible=False, title=f"{symbol} — {tf_label}", margin=dict(l=10, r=10, t=50, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0))
     return fig
 
 # =============================================================================
-# 4. ÇOKLU ALGORİTMİK MOTOR FONKSİYONLARI (KAYNAK 7 - BİREBİR KOPYALANDI)
+# 4. ÇOKLU ALGORİTMİK MOTOR FONKSİYONLARI 
 # =============================================================================
 ALGO_MARKETS = {
     "🇹🇷 BIST (Türkiye)": {"tv_market": "turkey", "yf_suffix": ".IS", "tv_prefix": "BIST:", "is_crypto": False},
     "🇺🇸 ABD (Borsaları)": {"tv_market": "america", "yf_suffix": "", "tv_prefix": "", "is_crypto": False},
     "🌍 Kripto (KuCoin)": {"tv_market": "crypto", "yf_suffix": "", "tv_prefix": "KUCOIN:", "is_crypto": True},
-} #[cite: 7]
+}
 ALGO_TIMEFRAMES = {
     "1 Saat (1H)": {"yf_int": "60m", "period": "730d", "tv_int": "60", "ccxt_int": "1h"},
     "4 Saat (4H)": {"yf_int": "60m", "period": "730d", "tv_int": "240", "resample": "4h", "ccxt_int": "4h"}, 
     "1 Gün (1D)": {"yf_int": "1d", "period": "5y", "tv_int": "D", "ccxt_int": "1d"},
     "1 Hafta (1W)": {"yf_int": "1wk", "period": "10y", "tv_int": "W", "ccxt_int": "1w"},
-} #[cite: 7]
+}
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_tv_symbols(tv_market: str, limit: int):
     url = f"https://scanner.tradingview.com/{tv_market}/scan"
-    payload = {"filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}], "options": {"lang": "en"}, "markets": [tv_market], "symbols": {"query": {"types": []}, "tickers": []}, "columns": ["name", "market_cap_basic"], "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"}, "range": [0, limit]} #[cite: 7]
+    payload = {"filter": [{"left": "type", "operation": "in_range", "right": ["stock"]}], "options": {"lang": "en"}, "markets": [tv_market], "symbols": {"query": {"types": []}, "tickers": []}, "columns": ["name", "market_cap_basic"], "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"}, "range": [0, limit]}
     try:
         resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code == 200: return [item["d"][0] for item in resp.json().get("data", [])]
@@ -352,7 +352,7 @@ def get_tv_symbols(tv_market: str, limit: int):
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_yf_data(tickers, interval, period):
-    return yf.download(list(tickers), period=period, interval=interval, group_by="ticker", threads=True, progress=False) #[cite: 7]
+    return yf.download(list(tickers), period=period, interval=interval, group_by="ticker", threads=True, progress=False)
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_crypto_symbols(limit: int):
@@ -360,7 +360,7 @@ def get_crypto_symbols(limit: int):
     try:
         tickers = exchange.fetch_tickers()
         excluded = ['USDC/USDT', 'FDUSD/USDT', 'TUSD/USDT', 'BUSD/USDT', 'USDP/USDT']
-        valid_pairs = [(sym, data.get('quoteVolume', 0)) for sym, data in tickers.items() if sym.endswith('/USDT') and sym not in excluded and ':' not in sym and data.get('quoteVolume', 0) is not None] #[cite: 7]
+        valid_pairs = [(sym, data.get('quoteVolume', 0)) for sym, data in tickers.items() if sym.endswith('/USDT') and sym not in excluded and ':' not in sym and data.get('quoteVolume', 0) is not None]
         valid_pairs.sort(key=lambda x: x[1], reverse=True)
         return [x[0] for x in valid_pairs[:limit]]
     except: return []
@@ -373,7 +373,7 @@ def fetch_single_ccxt(symbol, timeframe, limit=1500):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df.set_index('timestamp', inplace=True)
         return symbol, df
-    except: return symbol, None #[cite: 7]
+    except: return symbol, None
 
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_ccxt_batch(symbols, timeframe):
@@ -382,11 +382,11 @@ def fetch_ccxt_batch(symbols, timeframe):
         for future in concurrent.futures.as_completed([executor.submit(fetch_single_ccxt, sym, timeframe) for sym in symbols]):
             sym, df = future.result()
             if df is not None and len(df) > 50: results[sym] = df
-    return results #[cite: 7]
+    return results
 
 def run_lrc_strategy(df, lrc_len=9, wma_len=9, smma_len=21):
-    df['LRC'], df['WMA'], df['SMMA'] = ta.linreg(df['close'], length=lrc_len), ta.wma(df['close'], length=wma_len), df['close'].ewm(alpha=1.0/smma_len, adjust=False).mean() #[cite: 7]
-    trend_yukari, trend_asagi = (df['LRC'] > df['WMA']) & (df['WMA'] > df['SMMA']), (df['LRC'] < df['WMA']) & (df['WMA'] < df['SMMA']) #[cite: 7]
+    df['LRC'], df['WMA'], df['SMMA'] = ta.linreg(df['close'], length=lrc_len), ta.wma(df['close'], length=wma_len), df['close'].ewm(alpha=1.0/smma_len, adjust=False).mean()
+    trend_yukari, trend_asagi = (df['LRC'] > df['WMA']) & (df['WMA'] > df['SMMA']), (df['LRC'] < df['WMA']) & (df['WMA'] < df['SMMA'])
     durum = 0
     net_al, net_sat, durum_liste = [], [], []
     for i in range(len(df)):
@@ -394,16 +394,16 @@ def run_lrc_strategy(df, lrc_len=9, wma_len=9, smma_len=21):
         if al: durum = 1
         elif sat: durum = -1
         net_al.append(al); net_sat.append(sat); durum_liste.append(durum)
-    df['Net_AL'], df['Net_SAT'], df['Durum'] = net_al, net_sat, durum_liste #[cite: 7]
+    df['Net_AL'], df['Net_SAT'], df['Durum'] = net_al, net_sat, durum_liste
     return df
 
 def run_wma_triple_strategy(df, p1=14, p2=21, p3=35):
-    df['WMA1'], df['WMA2'], df['WMA3'] = ta.wma(df['close'], length=p1), ta.wma(df['close'], length=p2), ta.wma(df['close'], length=p3) #[cite: 7]
+    df['WMA1'], df['WMA2'], df['WMA3'] = ta.wma(df['close'], length=p1), ta.wma(df['close'], length=p2), ta.wma(df['close'], length=p3)
     wma1_prev, wma2_prev = df['WMA1'].shift(1), df['WMA2'].shift(1)
-    df['Net_AL'] = ((wma1_prev < wma2_prev) & (df['WMA1'] > df['WMA2'])) & (df['WMA2'] > df['WMA3']) #[cite: 7]
-    df['Yaklasan'] = (df['WMA1'] < df['WMA2']) & ((df['WMA2'] - df['WMA1']) < (wma2_prev - wma1_prev)) & (((df['WMA2'] - df['WMA1']) / df['WMA2'] * 100) < 1.5) & (df['WMA2'] > df['WMA3']) #[cite: 7]
+    df['Net_AL'] = ((wma1_prev < wma2_prev) & (df['WMA1'] > df['WMA2'])) & (df['WMA2'] > df['WMA3'])
+    df['Yaklasan'] = (df['WMA1'] < df['WMA2']) & ((df['WMA2'] - df['WMA1']) < (wma2_prev - wma1_prev)) & (((df['WMA2'] - df['WMA1']) / df['WMA2'] * 100) < 1.5) & (df['WMA2'] > df['WMA3'])
     df['Vol_SMA'], df['RSI'] = df['volume'].rolling(window=20).mean(), ta.rsi(df['close'], length=14)
-    df['Roket_Adayi'] = (df['WMA2'] > df['WMA3']) & ((abs(df['close'] - df['WMA1']) / df['WMA1'] * 100) < 1.5) & (df['volume'] > (df['Vol_SMA'] * 2.5)) & ((df['RSI'] > 50) & (df['RSI'] > df['RSI'].shift(1))) #[cite: 7]
+    df['Roket_Adayi'] = (df['WMA2'] > df['WMA3']) & ((abs(df['close'] - df['WMA1']) / df['WMA1'] * 100) < 1.5) & (df['volume'] > (df['Vol_SMA'] * 2.5)) & ((df['RSI'] > 50) & (df['RSI'] > df['RSI'].shift(1)))
     return df
 
 # =============================================================================
@@ -460,20 +460,19 @@ with tab2:
         df_view['Upside_Pct'] = df_view['Upside_Pct'].apply(lambda x: f"+%{x:.1f}" if pd.notnull(x) and x > 0 else ("-" if pd.isnull(x) else f"%{x:.1f}"))
         st.dataframe(df_view[['Ticker', 'Price', 'Dip_Fark_Pct', 'Upside_Pct', 'Market_Cap']], use_container_width=True, hide_index=True)
 
-# --- SEKME 3: FIBONACCI GOLDEN ZONE (Kaynak 6) ---
+# --- SEKME 3: FIBONACCI GOLDEN ZONE ---
 with tab3:
     st.markdown("### 📉 Fibonacci Golden Zone Tarayıcı")
     with st.expander("⚙️ Fibonacci Tarama Ayarları", expanded=True):
         col1, col2, col3 = st.columns(3)
         fib_mkt = col1.selectbox("Piyasa", list(FIB_MARKET_CONFIGS.keys()), key="fib_mkt")
         fib_tf = col2.selectbox("Zaman Dilimi", list(FIB_TIMEFRAME_CONFIGS.keys()), index=3, key="fib_tf")
-        fib_limit = col3.number_input("Taranacak Hacimli Hisse", 20, 500, 120, 10, key="fib_limit")
+        fib_limit = col3.number_input("Taranacak Hacimli Hisse (Sınır Kaldırıldı)", min_value=10, max_value=10000, value=5000, step=100, key="fib_limit")
         
         col4, col5 = st.columns(2)
         fib_recency = col4.slider("Sinyal Tazeliği (Son X Mum)", 1, 20, 3, key="fib_rec")
         fib_atr_mult = col5.slider("Yakın Takip Mesafesi (× ATR)", 0.2, 5.0, 1.5, step=0.1, key="fib_atr")
         
-        # Pine Script Default Params[cite: 6]
         pivot_len, confirm_bars = 15, 5
         golden_lower, golden_upper = 0.5, 0.618
         inv_buf_atr, zz_dev_atr = 0.3, 1.5
@@ -487,7 +486,7 @@ with tab3:
         term_ui3 = st.empty()
         term_ui3.code(f"[*] {fib_mkt} sembol listesi alınıyor...\n", language="bash")
         
-        symbols = get_market_symbols(mkt_cfg["tv_market"], limit=fib_limit)
+        symbols = get_tv_symbols(mkt_cfg["tv_market"], limit=fib_limit)
         if symbols:
             yf_tickers = [f"{s.replace('.', '-')}{mkt_cfg['yf_suffix']}" for s in symbols]
             term_ui3.code(f"[*] {len(yf_tickers)} hisse için {fib_tf} verisi indiriliyor...\n", language="bash")
@@ -515,7 +514,7 @@ with tab3:
                 processed_ok += 1
                 n = len(df); last_idx = n - 1; window_start = max(0, n - int(fib_recency))
                 price_now = float(df["close"].iloc[-1])
-                tv_url = f"https://www.tradingview.com/chart/?symbol={mkt_cfg['tv_prefix']}{sym}&interval={tf_cfg['tv_interval']}" #[cite: 6]
+                tv_url = f"https://www.tradingview.com/chart/?symbol={mkt_cfg['tv_prefix']}{sym}&interval={tf_cfg['tv_interval']}"
                 symbol_used = False
 
                 entry_hits = np.where(res["long_entry"][window_start:])[0]
@@ -525,7 +524,7 @@ with tab3:
                     if had_prior_exit or not only_after_sell:
                         sig_type = "🟡 Golden Zone Reddi" if res["entry_from_gz"][entry_idx] else "🔵 ZigZag Dip Onayı"
                         gLow, gTop = _golden_bounds(res["final_zone"], golden_lower, golden_upper)
-                        fresh_results.append({"Hisse": sym, "Sinyal Tipi": sig_type, "Sinyal Bar (geriye dönük)": n - 1 - entry_idx, "Güncel Fiyat": round(price_now, 4), "Golden Zone Alt": round(float(gLow), 4) if not np.isnan(gLow) else None, "Golden Zone Üst": round(float(gTop), 4) if not np.isnan(gTop) else None, "Trailing Stop": round(float(res["final_trailing_stop"]), 4) if not np.isnan(res["final_trailing_stop"]) else None, "Önceki SAT Var mı": "Evet" if had_prior_exit else "Hayır (İlk Sinyal)", "Bağlantı": tv_url}) #[cite: 6]
+                        fresh_results.append({"Hisse": sym, "Sinyal Tipi": sig_type, "Sinyal Bar (geriye dönük)": n - 1 - entry_idx, "Güncel Fiyat": round(price_now, 4), "Golden Zone Alt": round(float(gLow), 4) if not np.isnan(gLow) else None, "Golden Zone Üst": round(float(gTop), 4) if not np.isnan(gTop) else None, "Trailing Stop": round(float(res["final_trailing_stop"]), 4) if not np.isnan(res["final_trailing_stop"]) else None, "Önceki SAT Var mı": "Evet" if had_prior_exit else "Hayır (İlk Sinyal)", "Bağlantı": tv_url})
                         symbol_used = True
 
                 addon_hits = np.where(res["addon_signal"][window_start:])[0]
@@ -535,7 +534,7 @@ with tab3:
                     gLow, gTop = _golden_bounds(res["final_zone"], golden_lower, golden_upper)
                     open_idx = res.get("open_entry_idx")
                     open_price = round(float(df["close"].iloc[open_idx]), 4) if open_idx is not None else None
-                    addon_results.append({"Hisse": sym, "Ekleme Sinyal Tipi": sig_type, "Sinyal Bar (geriye dönük)": n - 1 - addon_idx, "Güncel Fiyat": round(price_now, 4), "İlk Alım Fiyatı": open_price, "Golden Zone Alt": round(float(gLow), 4) if not np.isnan(gLow) else None, "Golden Zone Üst": round(float(gTop), 4) if not np.isnan(gTop) else None, "Trailing Stop": round(float(res["final_trailing_stop"]), 4) if not np.isnan(res["final_trailing_stop"]) else None, "Bağlantı": tv_url}) #[cite: 6]
+                    addon_results.append({"Hisse": sym, "Ekleme Sinyal Tipi": sig_type, "Sinyal Bar (geriye dönük)": n - 1 - addon_idx, "Güncel Fiyat": round(price_now, 4), "İlk Alım Fiyatı": open_price, "Golden Zone Alt": round(float(gLow), 4) if not np.isnan(gLow) else None, "Golden Zone Üst": round(float(gTop), 4) if not np.isnan(gTop) else None, "Trailing Stop": round(float(res["final_trailing_stop"]), 4) if not np.isnan(res["final_trailing_stop"]) else None, "Bağlantı": tv_url})
                     symbol_used = True
 
                 fz = res["final_zone"]
@@ -550,7 +549,7 @@ with tab3:
                             elif 0 < (price_now - gTop) <= fib_atr_mult * atr_last: status_txt = "👀 Yaklaşıyor"
                             else: status_txt = None
                             if status_txt:
-                                watch_results.append({"Hisse": sym, "Durum": status_txt, "Güncel Fiyat": round(price_now, 4), "Golden Zone Alt": round(float(gLow), 4), "Golden Zone Üst": round(float(gTop), 4), "Zone'a Uzaklık (ATR)": round((price_now - gTop) / atr_last, 2) if atr_last > 0 else None, "Bağlantı": tv_url}) #[cite: 6]
+                                watch_results.append({"Hisse": sym, "Durum": status_txt, "Güncel Fiyat": round(price_now, 4), "Golden Zone Alt": round(float(gLow), 4), "Golden Zone Üst": round(float(gTop), 4), "Zone'a Uzaklık (ATR)": round((price_now - gTop) / atr_last, 2) if atr_last > 0 else None, "Bağlantı": tv_url})
                                 symbol_used = True
 
                 if symbol_used: stored_dfs[sym], stored_res[sym] = df, res
@@ -565,11 +564,11 @@ with tab3:
         st.write("---")
         t1, t2, t3 = st.tabs([f"🎯 Taze AL Sinyalleri ({len(f_res)})", f"👀 Yakın Takip ({len(w_res)})", f"➕ Ekleme / İkinci Alım ({len(a_res)})"])
         with t1:
-            if f_res: st.dataframe(pd.DataFrame(f_res), use_container_width=True, hide_index=True, column_config={"Bağlantı": st.column_config.LinkColumn("TradingView", display_text="📊 Grafiği Aç")}) #[cite: 6]
+            if f_res: st.dataframe(pd.DataFrame(f_res), use_container_width=True, hide_index=True, column_config={"Bağlantı": st.column_config.LinkColumn("TradingView", display_text="📊 Grafiği Aç")})
         with t2:
-            if w_res: st.dataframe(pd.DataFrame(w_res), use_container_width=True, hide_index=True, column_config={"Bağlantı": st.column_config.LinkColumn("TradingView", display_text="📊 Grafiği Aç")}) #[cite: 6]
+            if w_res: st.dataframe(pd.DataFrame(w_res), use_container_width=True, hide_index=True, column_config={"Bağlantı": st.column_config.LinkColumn("TradingView", display_text="📊 Grafiği Aç")})
         with t3:
-            if a_res: st.dataframe(pd.DataFrame(a_res), use_container_width=True, hide_index=True, column_config={"Bağlantı": st.column_config.LinkColumn("TradingView", display_text="📊 Grafiği Aç")}) #[cite: 6]
+            if a_res: st.dataframe(pd.DataFrame(a_res), use_container_width=True, hide_index=True, column_config={"Bağlantı": st.column_config.LinkColumn("TradingView", display_text="📊 Grafiği Aç")})
             
         st.subheader("🔬 Grafik İnceleme İstasyonu")
         symbols_available = list(meta.get("dfs", {}).keys())
@@ -578,9 +577,9 @@ with tab3:
             if selected:
                 col_chart, col_info = st.columns([4, 1])
                 with col_chart:
-                    st.plotly_chart(build_chart(meta["dfs"][selected], meta["res"][selected], selected, meta["tf_label"]), use_container_width=True) #[cite: 6]
+                    st.plotly_chart(build_chart(meta["dfs"][selected], meta["res"][selected], selected, meta["tf_label"]), use_container_width=True)
 
-# --- SEKME 4: ÇOKLU ALGORİTMİK TARAMA (Kaynak 7) ---
+# --- SEKME 4: ÇOKLU ALGORİTMİK TARAMA ---
 with tab4:
     st.markdown("### ⚡ Kantitatif Trend & Sinyal Motoru")
     with st.expander("⚙️ Algoritma Ayarları", expanded=True):
@@ -588,10 +587,9 @@ with tab4:
         algo_mkt = col1.selectbox("Piyasa", list(ALGO_MARKETS.keys()), key="algo_mkt")
         algo_tf = col2.selectbox("Zaman Dilimi", list(ALGO_TIMEFRAMES.keys()), index=2, key="algo_tf")
         sel_algo = st.radio("Kullanılacak Algoritma:", ["1️⃣ LRC + WMA + SMMA", "2️⃣ Üçlü WMA (14-21-35)"], horizontal=True)
-        algo_limit = st.number_input("Taranacak Varlık Sayısı", 20, 500, 100, 10, key="algo_limit")
+        algo_limit = st.number_input("Taranacak Varlık Sayısı (Sınır Kaldırıldı)", min_value=10, max_value=10000, value=5000, step=100, key="algo_limit")
         algo_recency = st.slider("Sinyal Tazeliği (Son X Mum)", 1, 10, 3, key="algo_rec")
         
-        # Strateji Parametreleri[cite: 7]
         lrc_len, wma_len, smma_len = 9, 9, 21
         p1, p2, p3 = 14, 21, 35
         run_algo_btn = st.button("🚀 Algoritmik Taramayı Başlat", type="primary", use_container_width=True)
@@ -605,15 +603,15 @@ with tab4:
         term_ui4 = st.empty()
         term_ui4.code(f"[*] {sel_algo} Motoru Başlatıldı...\n", language="bash")
         
-        symbols = get_tv_symbols(mkt["tv_market"], limit=algo_limit) if not mkt["is_crypto"] else get_crypto_symbols(limit=algo_limit) #[cite: 7]
+        symbols = get_tv_symbols(mkt["tv_market"], limit=algo_limit) if not mkt["is_crypto"] else get_crypto_symbols(limit=algo_limit)
         if symbols:
             term_ui4.code(f"[*] {len(symbols)} varlık için derin veriler indiriliyor...\n", language="bash")
             if mkt["is_crypto"]:
-                kripto_veriler = fetch_ccxt_batch(symbols, tf["ccxt_int"]) #[cite: 7]
+                kripto_veriler = fetch_ccxt_batch(symbols, tf["ccxt_int"])
                 batch_data = kripto_veriler
             else:
-                yf_tickers = [f"{s.replace('.', '-')}{mkt['yf_suffix']}" for s in symbols] #[cite: 7]
-                batch_data = fetch_yf_data(tuple(yf_tickers), tf["yf_int"], tf["period"]) #[cite: 7]
+                yf_tickers = [f"{s.replace('.', '-')}{mkt['yf_suffix']}" for s in symbols]
+                batch_data = fetch_yf_data(tuple(yf_tickers), tf["yf_int"], tf["period"])
 
             pb = st.progress(0)
             for idx, sym in enumerate(symbols):
@@ -629,32 +627,32 @@ with tab4:
                     df = df.dropna()
                     
                     if "resample" in tf:
-                        df = df.resample(tf["resample"]).agg({"open":"first", "high":"max", "low":"min", "close":"last", "volume":"sum"}).dropna() #[cite: 7]
+                        df = df.resample(tf["resample"]).agg({"open":"first", "high":"max", "low":"min", "close":"last", "volume":"sum"}).dropna()
                     if len(df) < 50: continue
                     
-                    if sel_algo.startswith("1"): df = run_lrc_strategy(df, lrc_len, wma_len, smma_len) #[cite: 7]
-                    else: df = run_wma_triple_strategy(df, p1, p2, p3) #[cite: 7]
+                    if sel_algo.startswith("1"): df = run_lrc_strategy(df, lrc_len, wma_len, smma_len)
+                    else: df = run_wma_triple_strategy(df, p1, p2, p3)
                     
                     window_start = max(0, len(df) - algo_recency)
                     son_fiyat = round(float(df['close'].iloc[-1]), 4)
                     son_bar = df.iloc[-1]
-                    tv_url = f"https://www.tradingview.com/chart/?symbol={mkt['tv_prefix']}{sym}&interval={tf['tv_int']}" #[cite: 7]
+                    tv_url = f"https://www.tradingview.com/chart/?symbol={mkt['tv_prefix']}{sym}&interval={tf['tv_int']}"
                     
-                    al_vurdu = df['Net_AL'].iloc[window_start:].any() #[cite: 7]
-                    yaklasan_vurdu = df['Yaklasan'].iloc[window_start:].any() if 'Yaklasan' in df.columns else False #[cite: 7]
-                    roket_vurdu = df['Roket_Adayi'].iloc[window_start:].any() if 'Roket_Adayi' in df.columns else False #[cite: 7]
+                    al_vurdu = df['Net_AL'].iloc[window_start:].any()
+                    yaklasan_vurdu = df['Yaklasan'].iloc[window_start:].any() if 'Yaklasan' in df.columns else False
+                    roket_vurdu = df['Roket_Adayi'].iloc[window_start:].any() if 'Roket_Adayi' in df.columns else False
                     
                     if al_vurdu:
                         if sel_algo.startswith("1"):
-                            st.session_state['sonuclar_hafiza'].append({"Varlık": sym, "Durum": "🔥 NET ALIM", "Fiyat": son_fiyat, "LRC (Mavi)": round(float(son_bar['LRC']), 4), "WMA (Turuncu)": round(float(son_bar['WMA']), 4), "SMMA (Mor)": round(float(son_bar['SMMA']), 4), "Link": tv_url}) #[cite: 7]
+                            st.session_state['sonuclar_hafiza'].append({"Varlık": sym, "Durum": "🔥 NET ALIM", "Fiyat": son_fiyat, "LRC (Mavi)": round(float(son_bar['LRC']), 4), "WMA (Turuncu)": round(float(son_bar['WMA']), 4), "SMMA (Mor)": round(float(son_bar['SMMA']), 4), "Link": tv_url})
                         else:
-                            st.session_state['sonuclar_hafiza'].append({"Varlık": sym, "Durum": "🔥 NET ALIM", "Fiyat": son_fiyat, f"WMA {p1}": round(float(son_bar['WMA1']), 4), f"WMA {p2}": round(float(son_bar['WMA2']), 4), f"WMA {p3}": round(float(son_bar['WMA3']), 4), "Link": tv_url}) #[cite: 7]
+                            st.session_state['sonuclar_hafiza'].append({"Varlık": sym, "Durum": "🔥 NET ALIM", "Fiyat": son_fiyat, f"WMA {p1}": round(float(son_bar['WMA1']), 4), f"WMA {p2}": round(float(son_bar['WMA2']), 4), f"WMA {p3}": round(float(son_bar['WMA3']), 4), "Link": tv_url})
                         st.session_state['grafik_hafiza'][sym] = df
                     elif roket_vurdu and sel_algo.startswith("2"):
-                        st.session_state['sonuclar_hafiza'].append({"Varlık": sym, "Durum": "🚀 ROKET ADAYI (Hacim+RSI)", "Fiyat": son_fiyat, f"WMA {p1}": round(float(son_bar['WMA1']), 4), f"WMA {p2}": round(float(son_bar['WMA2']), 4), f"WMA {p3}": round(float(son_bar['WMA3']), 4), "Link": tv_url}) #[cite: 7]
+                        st.session_state['sonuclar_hafiza'].append({"Varlık": sym, "Durum": "🚀 ROKET ADAYI (Hacim+RSI)", "Fiyat": son_fiyat, f"WMA {p1}": round(float(son_bar['WMA1']), 4), f"WMA {p2}": round(float(son_bar['WMA2']), 4), f"WMA {p3}": round(float(son_bar['WMA3']), 4), "Link": tv_url})
                         st.session_state['grafik_hafiza'][sym] = df
                     elif yaklasan_vurdu and sel_algo.startswith("2"):
-                        st.session_state['sonuclar_hafiza'].append({"Varlık": sym, "Durum": "👀 YAKLAŞIYOR (Pusu)", "Fiyat": son_fiyat, f"WMA {p1}": round(float(son_bar['WMA1']), 4), f"WMA {p2}": round(float(son_bar['WMA2']), 4), f"WMA {p3}": round(float(son_bar['WMA3']), 4), "Link": tv_url}) #[cite: 7]
+                        st.session_state['sonuclar_hafiza'].append({"Varlık": sym, "Durum": "👀 YAKLAŞIYOR (Pusu)", "Fiyat": son_fiyat, f"WMA {p1}": round(float(son_bar['WMA1']), 4), f"WMA {p2}": round(float(son_bar['WMA2']), 4), f"WMA {p3}": round(float(son_bar['WMA3']), 4), "Link": tv_url})
                         st.session_state['grafik_hafiza'][sym] = df
                 except: pass
             pb.empty()
@@ -664,35 +662,35 @@ with tab4:
     if st.session_state.get('tarama_tamamlandi') and st.session_state.get('sonuclar_hafiza'):
         st.success(f"Tarama Tamamlandı! {len(st.session_state['sonuclar_hafiza'])} adet varlık bulundu.")
         st.markdown(f"### 📊 Tarama Özeti ({st.session_state['secili_strateji_ismi']})")
-        st.dataframe(pd.DataFrame(st.session_state['sonuclar_hafiza']), use_container_width=True, hide_index=True, column_config={"Link": st.column_config.LinkColumn("TradingView'da Aç")}) #[cite: 7]
+        st.dataframe(pd.DataFrame(st.session_state['sonuclar_hafiza']), use_container_width=True, hide_index=True, column_config={"Link": st.column_config.LinkColumn("TradingView'da Aç")})
         
         st.write("---")
         st.markdown("### 🔬 Grafik İnceleme İstasyonu")
         secilen_varlik = st.selectbox("Grafiğini Görmek İstediğiniz Varlığı Seçin:", list(st.session_state['grafik_hafiza'].keys()), key="algo_chart_sel")
         if secilen_varlik:
-            g_df = st.session_state['grafik_hafiza'][secilen_varlik].iloc[-150:] #[cite: 7]
+            g_df = st.session_state['grafik_hafiza'][secilen_varlik].iloc[-150:]
             fig = go.Figure()
             fig.add_trace(go.Candlestick(x=g_df.index, open=g_df["open"], high=g_df["high"], low=g_df["low"], close=g_df["close"], name="Fiyat"))
             if "LRC" in st.session_state['secili_strateji_ismi']:
-                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['LRC'], line=dict(color='#3b82f6', width=2), name='LRC')) #[cite: 7]
-                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['WMA'], line=dict(color='#f97316', width=2), name='WMA')) #[cite: 7]
-                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['SMMA'], line=dict(color='#a855f7', width=2), name='SMMA')) #[cite: 7]
+                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['LRC'], line=dict(color='#3b82f6', width=2), name='LRC'))
+                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['WMA'], line=dict(color='#f97316', width=2), name='WMA'))
+                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['SMMA'], line=dict(color='#a855f7', width=2), name='SMMA'))
             else:
                 p1_val, p2_val, p3_val = 14, 21, 35
-                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['WMA1'], line=dict(color='blue', width=2), name=f'WMA {p1_val}')) #[cite: 7]
-                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['WMA2'], line=dict(color='orange', width=2), name=f'WMA {p2_val}')) #[cite: 7]
-                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['WMA3'], line=dict(color='red', width=2), name=f'WMA {p3_val}')) #[cite: 7]
+                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['WMA1'], line=dict(color='blue', width=2), name=f'WMA {p1_val}'))
+                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['WMA2'], line=dict(color='orange', width=2), name=f'WMA {p2_val}'))
+                fig.add_trace(go.Scatter(x=g_df.index, y=g_df['WMA3'], line=dict(color='red', width=2), name=f'WMA {p3_val}'))
             
             al_noktasi = g_df[g_df['Net_AL'] == True]
-            if not al_noktasi.empty: fig.add_trace(go.Scatter(x=al_noktasi.index, y=al_noktasi["low"] * 0.98, mode="markers+text", marker=dict(symbol="triangle-up", size=14, color="#22c55e"), text="AL", textposition="bottom center", name="Al Sinyali")) #[cite: 7]
+            if not al_noktasi.empty: fig.add_trace(go.Scatter(x=al_noktasi.index, y=al_noktasi["low"] * 0.98, mode="markers+text", marker=dict(symbol="triangle-up", size=14, color="#22c55e"), text="AL", textposition="bottom center", name="Al Sinyali"))
             
             if "WMA" in st.session_state['secili_strateji_ismi']:
                 if 'Yaklasan' in g_df.columns:
                     yaklasan_noktasi = g_df[(g_df['Yaklasan'] == True) & (g_df['Net_AL'] == False) & (g_df['Roket_Adayi'] == False)]
-                    if not yaklasan_noktasi.empty: fig.add_trace(go.Scatter(x=yaklasan_noktasi.index, y=yaklasan_noktasi["low"] * 0.98, mode="markers+text", marker=dict(symbol="circle", size=10, color="#eab308"), text="PUSU", textposition="bottom center", name="Yaklaşan Sinyal")) #[cite: 7]
+                    if not yaklasan_noktasi.empty: fig.add_trace(go.Scatter(x=yaklasan_noktasi.index, y=yaklasan_noktasi["low"] * 0.98, mode="markers+text", marker=dict(symbol="circle", size=10, color="#eab308"), text="PUSU", textposition="bottom center", name="Yaklaşan Sinyal"))
                 if 'Roket_Adayi' in g_df.columns:
                     roket_noktasi = g_df[(g_df['Roket_Adayi'] == True) & (g_df['Net_AL'] == False)]
-                    if not roket_noktasi.empty: fig.add_trace(go.Scatter(x=roket_noktasi.index, y=roket_noktasi["low"] * 0.96, mode="markers+text", marker=dict(symbol="star", size=12, color="#a855f7"), text="ROKET", textposition="bottom center", name="Roket Adayı")) #[cite: 7]
+                    if not roket_noktasi.empty: fig.add_trace(go.Scatter(x=roket_noktasi.index, y=roket_noktasi["low"] * 0.96, mode="markers+text", marker=dict(symbol="star", size=12, color="#a855f7"), text="ROKET", textposition="bottom center", name="Roket Adayı"))
                 
             fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, title=f"{secilen_varlik} Görünümü", margin=dict(l=20, r=20, t=50, b=20))
             st.plotly_chart(fig, use_container_width=True)
@@ -700,9 +698,14 @@ with tab4:
 # --- SEKME 5: MAKRO HABER VE DUYGU ANALİZİ ---
 with tab5:
     st.markdown("### 📰 Şirket Haberleri ve Duygu Skoru")
+    
     col_news1, col_news2 = st.columns([3, 1])
-    with col_news1: news_ticker = st.text_input("Haberlerini Çekmek İstediğiniz Hisse Sembolü (Örn: AAPL, MSFT):", "AAPL")
-    with col_news2: st.write(""); st.write(""); run_news = st.button("Haberleri Getir", use_container_width=True)
+    with col_news1:
+        news_ticker = st.text_input("Haberlerini Çekmek İstediğiniz Hisse Sembolü (Örn: AAPL, MSFT):", "AAPL")
+    with col_news2:
+        st.write("") 
+        st.write("")
+        run_news = st.button("Haberleri Getir", use_container_width=True)
         
     if run_news:
         term_ui5 = st.empty()
@@ -711,6 +714,7 @@ with tab5:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=7)
         url = f"https://finnhub.io/api/v1/company-news?symbol={news_ticker}&from={start_date.strftime('%Y-%m-%d')}&to={end_date.strftime('%Y-%m-%d')}&token={FINNHUB_API_KEY}"
+        
         try:
             news_res = requests.get(url).json()
             if news_res:
@@ -720,6 +724,17 @@ with tab5:
                     if score >= 0.15: sentiment_ui = f"<span class='badge-bullish'>POZİTİF ({score:.2f})</span>"
                     elif score <= -0.15: sentiment_ui = f"<span class='badge-bearish'>NEGATİF ({score:.2f})</span>"
                     else: sentiment_ui = f"<span style='color: var(--text-muted); font-size: 0.75rem; font-weight: bold;'>NÖTR ({score:.2f})</span>"
-                    st.markdown(f"<div class='quant-card' style='padding: 12px;'><div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'><a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>{sentiment_ui}</div><div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div></div>", unsafe_allow_html=True)
-            else: term_ui5.code("[-] Son 7 güne ait majör bir haber bulunamadı.\n", language="bash")
-        except Exception as e: term_ui5.code(f"[!] HATA: Veri akışı sağlanamadı. Nedeni: {e}\n", language="bash")
+                        
+                    st.markdown(f"""
+                    <div class='quant-card' style='padding: 12px;'>
+                        <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;'>
+                            <a href='{item['url']}' target='_blank' style='color: white; font-weight: 700; text-decoration: none; font-size: 1rem;'>{item['headline']}</a>
+                            {sentiment_ui}
+                        </div>
+                        <div style='font-size: 0.75rem; color: var(--text-muted);'>{item['source']} • {datetime.fromtimestamp(item['datetime']).strftime('%d %b %Y, %H:%M')}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else: 
+                term_ui5.code("[-] Son 7 güne ait majör bir haber bulunamadı.\n", language="bash")
+        except Exception as e: 
+            term_ui5.code(f"[!] HATA: Veri akışı sağlanamadı. Nedeni: {e}\n", language="bash")
