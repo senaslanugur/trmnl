@@ -17,7 +17,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS STİL ENJEKSİYONU ---
+# --- CSS STİL ENJEKSİYONU (UI DÜZELTMELERİ DAHİL) ---
 st.markdown("""
 <style>
     :root {
@@ -49,11 +49,23 @@ st.markdown("""
     .signal-buy { color: #10b981; font-weight: bold; }
     .signal-sell { color: #ef4444; font-weight: bold; }
     .signal-neutral { color: #94a3b8; font-weight: bold; }
+    
+    /* UZUN METİNLERİN KESİLMESİNİ ENGELLEYEN CSS (BALİNA/INSIDER İÇİN) */
+    div[data-testid="stMetricValue"] > div {
+        white-space: normal !important;
+        word-wrap: break-word !important;
+        font-size: 1.3rem !important;
+        line-height: 1.3 !important;
+    }
+    div[data-testid="stMetricLabel"] {
+        word-wrap: break-word !important;
+        white-space: normal !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # --- GLOBAL AYARLAR VE NLP ---
-FINNHUB_API_KEY = "c94i99aad3if4j50rvn0" #[cite: 1]
+FINNHUB_API_KEY = "c94i99aad3if4j50rvn0"
 
 @st.cache_resource
 def get_nlp_analyzer():
@@ -65,7 +77,7 @@ def get_nlp_analyzer():
         'underperform': -3.5, 'warning': -3.0, 'loss': -3.5, 'drop': -3.0,
         'crash': -4.0, 'bankruptcy': -5.0, 'shatter': 3.0
     }
-    analyzer.lexicon.update(FINANCIAL_LEXICON) #[cite: 2]
+    analyzer.lexicon.update(FINANCIAL_LEXICON)
     return analyzer
 
 # --- VERİ ÇEKME FONKSİYONLARI ---
@@ -74,7 +86,7 @@ def get_nlp_analyzer():
 def fetch_upcoming_earnings():
     url = "https://scanner.tradingview.com/america/scan?label-product=calendar-earnings"
     now = int(time.time())
-    one_week_later = now + (7 * 24 * 60 * 60) # Önümüzdeki 1 hafta (7 gün)
+    one_week_later = now + (7 * 24 * 60 * 60) 
     
     payload = {
         "filter": [
@@ -85,14 +97,13 @@ def fetch_upcoming_earnings():
         "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic"],
         "sort": {"sortBy": "earnings_release_next_date", "sortOrder": "asc"},
         "range": [0, 500] 
-    } #[cite: 1, 3]
+    }
 
     try:
         response = requests.post(url, json=payload)
         if response.status_code == 200:
             data = response.json().get('data', [])
             
-            # Saniye temizleme ve pazar değerine göre sıralama algoritması[cite: 3]
             def sort_key(x):
                 d = x['d']
                 ts = d[2]
@@ -108,7 +119,6 @@ def fetch_upcoming_earnings():
                 d = item['d']
                 val = d[3] if d[3] else 0
                 
-                # Market Cap formatlaması[cite: 4]
                 if val >= 1e12: m_cap_str = f"${val/1e12:.2f}T"
                 elif val >= 1e9: m_cap_str = f"${val/1e9:.2f}B"
                 elif val >= 1e6: m_cap_str = f"${val/1e6:.2f}M"
@@ -128,13 +138,78 @@ def fetch_upcoming_earnings():
         st.error(f"TradingView API Hatası: {e}")
         return pd.DataFrame()
 
+@st.cache_data(ttl=3600)
+def fetch_general_screener():
+    url = "https://scanner.tradingview.com/america/scan"
+    payload = {
+        "filter": [
+            {"left": "type", "operation": "in_range", "right": ["stock", "dr"]}
+        ],
+        "options": {"lang": "en"},
+        "markets": ["america"],
+        "columns": [
+            "name", 
+            "close", 
+            "price_52_week_low", 
+            "price_52_week_high", 
+            "Recommend.All", 
+            "market_cap_basic"
+        ],
+        "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
+        "range": [0, 2000]
+    }
+
+    try:
+        response = requests.post(url, json=payload)
+        if response.status_code == 200:
+            data = response.json().get('data', [])
+            parsed = []
+            for item in data:
+                sym = item['s'].split(':')[-1]
+                d = item['d']
+                close = d[1]
+                low52 = d[2]
+                high52 = d[3]
+                rec = d[4]
+                mcap = d[5]
+                
+                # 52W Dip Farkı Hesaplama
+                if close and low52 and low52 > 0:
+                    dip_farki = ((close - low52) / low52) * 100
+                else:
+                    dip_farki = 0
+                    
+                # Teknik Sinyal (TradingView Konsensüsü -1 ile 1 arasıdır)
+                if rec is not None:
+                    if rec >= 0.5: rec_str = "GÜÇLÜ AL 🔥"
+                    elif rec >= 0.1: rec_str = "AL ✅"
+                    elif rec <= -0.5: rec_str = "GÜÇLÜ SAT 🆘"
+                    elif rec <= -0.1: rec_str = "SAT ⚠️"
+                    else: rec_str = "NÖTR ⚖️"
+                else:
+                    rec_str = "BİLİNMİYOR"
+                    
+                if mcap and mcap >= 1e9: mcap_str = f"${mcap/1e9:.2f}B"
+                elif mcap and mcap >= 1e6: mcap_str = f"${mcap/1e6:.2f}M"
+                else: mcap_str = "-"
+                
+                parsed.append({
+                    "Hisse": sym,
+                    "Fiyat ($)": close,
+                    "52W Dip Farkı (%)": dip_farki,
+                    "Teknik Sinyal": rec_str,
+                    "Market Cap": mcap_str,
+                    "TV_Rec": rec if rec else 0
+                })
+            return pd.DataFrame(parsed)
+        return pd.DataFrame()
+    except Exception as e:
+        return pd.DataFrame()
+
 def fetch_finnhub_analysis(ticker):
     try:
-        # Quote & Metrics[cite: 1]
         quote = requests.get(f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}").json()
         metric = requests.get(f"https://finnhub.io/api/v1/stock/metric?symbol={ticker}&metric=all&token={FINNHUB_API_KEY}").json().get('metric', {})
-        
-        # Recommendations & Insider[cite: 1]
         recs = requests.get(f"https://finnhub.io/api/v1/stock/recommendation?symbol={ticker}&token={FINNHUB_API_KEY}").json()
         insider = requests.get(f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={ticker}&token={FINNHUB_API_KEY}").json().get('data', [])
 
@@ -142,19 +217,17 @@ def fetch_finnhub_analysis(ticker):
         low_52 = metric.get('52WeekLow', 0)
         high_52 = metric.get('52WeekHigh', 0)
         
-        # Analist Konsensüsü
         r = recs[0] if recs else {}
         total_buy = r.get('buy',0) + r.get('strongBuy',0)
         total_sell = r.get('sell',0) + r.get('strongSell',0)
-        analyst = f"Al: {total_buy} / Sat: {total_sell}"
+        analyst = f"Al:{total_buy} / Sat:{total_sell}"
         
-        # Balina (Büyük Alım)[cite: 1]
         balina_str = "Yok"
         if insider:
             large_buys = [t for t in insider if t.get('share', 0) > 0]
             if large_buys:
                 last_buy = large_buys[0]
-                balina_str = f"Alım ({(last_buy.get('change', 0)):,} lot - {last_buy['filingDate']})"
+                balina_str = f"Alım ({(last_buy.get('change', 0)):,} lot | {last_buy['filingDate']})"
 
         return curr_price, low_52, high_52, analyst, balina_str
     except:
@@ -164,8 +237,13 @@ def fetch_finnhub_analysis(ticker):
 st.title("⚡ ProPortföy Kantitatif Analiz Terminali")
 st.markdown("<p style='color: #94a3b8; margin-top:-15px;'>Bağımsız katmanlı tarama ve derin teknik analiz sistemi.</p>", unsafe_allow_html=True)
 
-# TABS (İzole Edilmiş Mimariler)
-tab1, tab2, tab3 = st.tabs(["Ana Tarayıcı (Tab-1 Algoritma)", "Teknik ve Grafikler (Tab-2)", "Haber ve Duygu Analizi (Tab-3)"])
+# TABS (İzole Edilmiş Mimariler - Tab 4 eklendi)
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Ana Tarayıcı (Tab-1 Algoritma)", 
+    "Teknik ve Grafikler (Tab-2)", 
+    "Haber ve Duygu Analizi (Tab-3)",
+    "🌍 Genel Piyasa Radarı (Tab-4)"
+])
 
 # --- TAB 1: ÇEKİRDEK TARAYICI (DOKUNULMAZ ALGORİTMA) ---
 with tab1:
@@ -175,7 +253,6 @@ with tab1:
         df_earnings = fetch_upcoming_earnings()
         
     if not df_earnings.empty:
-        # Kullanıcı etkileşimi için metrik kartları
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='metric-card'><div class='metric-title'>Taranan Hisse</div><div class='metric-val'>{len(df_earnings)}</div></div>", unsafe_allow_html=True)
         avg_eps = df_earnings["Est. EPS"].mean()
@@ -197,7 +274,6 @@ with tab1:
             sc3.metric("Analist Görüşü", analyst)
             sc4.metric("Balina / Insider", balina)
             
-            # Formasyon Taraması (Dip Yakınlığı)
             dip_farki = ((curr_price - low_52) / low_52) * 100 if low_52 > 0 else 0
             if 0 < dip_farki <= 15:
                 st.success(f"**Katı Teknik Sinyal:** Fiyat 52 haftalık dibe %{dip_farki:.1f} yakınlıkta. Potansiyel ALIM bölgesi.")
@@ -217,7 +293,6 @@ with tab2:
             hist_data = yf.download(analyze_ticker, period="6mo")
         
         if not hist_data.empty:
-            # Hareketli Ortalamalar (Katı Teknik)
             hist_data['SMA_20'] = hist_data['Close'].rolling(window=20).mean()
             hist_data['SMA_50'] = hist_data['Close'].rolling(window=50).mean()
             
@@ -225,7 +300,6 @@ with tab2:
                                 vertical_spacing=0.03, subplot_titles=(f'{analyze_ticker} Fiyat & SMA', 'Hacim'),
                                 row_width=[0.2, 0.7])
             
-            # Candlestick
             fig.add_trace(go.Candlestick(x=hist_data.index,
                             open=hist_data['Open'].squeeze(),
                             high=hist_data['High'].squeeze(),
@@ -233,11 +307,10 @@ with tab2:
                             close=hist_data['Close'].squeeze(),
                             name='Fiyat'), row=1, col=1)
             
-            # SMA 20 & 50
             fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['SMA_20'].squeeze(), line=dict(color='orange', width=1.5), name='SMA 20'), row=1, col=1)
             fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['SMA_50'].squeeze(), line=dict(color='blue', width=1.5), name='SMA 50'), row=1, col=1)
             
-            # Hacim (Vektörel ve güvenli eşleştirme)
+            # Vektörel Hacim Renklendirme Düzeltmesi
             hist_open = hist_data['Open'].squeeze().tolist()
             hist_close = hist_data['Close'].squeeze().tolist()
             colors = ['red' if o > c else 'green' for o, c in zip(hist_open, hist_close)]
@@ -247,7 +320,6 @@ with tab2:
             fig.update_layout(height=600, template="plotly_dark", showlegend=True, margin=dict(l=0, r=0, t=40, b=0), xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
             
-            # Kesişim Sinyali Kontrolü (Golden Cross / Death Cross)
             last_sma20 = hist_data['SMA_20'].iloc[-1].item()
             last_sma50 = hist_data['SMA_50'].iloc[-1].item()
             prev_sma20 = hist_data['SMA_20'].iloc[-2].item()
@@ -259,7 +331,6 @@ with tab2:
                 st.markdown("<h4 class='signal-sell'>🔴 SİNYAL: Kısa vadeli trend, orta vadeli trendi aşağı kesti (BEARISH).</h4>", unsafe_allow_html=True)
             else:
                 st.markdown("<h4 class='signal-neutral'>⚪ SİNYAL: Belirgin bir hareketli ortalama kesişimi yok (NÖTR).</h4>", unsafe_allow_html=True)
-
     else:
         st.info("Listede hisse bulunamadığı için grafik oluşturulamıyor.")
 
@@ -272,7 +343,6 @@ with tab3:
         
         with st.spinner("Finnhub'dan haberler ve duygu analizi yükleniyor..."):
             analyzer = get_nlp_analyzer()
-            
             now = datetime.now()
             past_week = now - timedelta(days=7)
             to_date = now.strftime('%Y-%m-%d')
@@ -286,20 +356,17 @@ with tab3:
                     news_data = news_res.json()
                     
                     if news_data:
-                        for n in news_data[:10]: # Son 10 haber[cite: 2, 5]
+                        for n in news_data[:10]:
                             pub_date = datetime.fromtimestamp(n['datetime']).strftime('%Y-%m-%d %H:%M')
                             headline = n['headline']
                             url = n['url']
                             source = n['source']
                             
-                            # Duygu Analizi Puanlaması[cite: 2]
                             score = analyzer.polarity_scores(headline)['compound']
                             
-                            # Tazelik ağırlığı (son 24 saat ise skoru artır)[cite: 2]
                             if (now.timestamp() - n['datetime']) <= 86400:
                                 score *= 1.3
                                 
-                            # Eşik belirleme
                             if score >= 0.15: 
                                 status, color = "AL 🚀", "var(--success)"
                             elif score <= -0.15: 
@@ -320,3 +387,44 @@ with tab3:
                         st.info("Son 1 haftaya ait haber bulunamadı.")
             except Exception as e:
                 st.error(f"Haberler çekilirken hata oluştu: {e}")
+
+# --- TAB 4: GENEL PİYASA RADARI (YENİ SEKME) ---
+with tab4:
+    st.markdown("### 🌍 Genel Piyasa Radarı (En Büyük 2000 Hisse)")
+    st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Sadece kazanç açıklayacakları değil, genel piyasadaki fırsatları katı teknik sinyaller ve 52W dip yakınlığıyla tarar.</p>", unsafe_allow_html=True)
+    
+    with st.spinner("Piyasadaki en büyük hisseler taranıyor..."):
+        df_general = fetch_general_screener()
+        
+    if not df_general.empty:
+        # Filtreleme Seçenekleri
+        filter_option = st.radio(
+            "Taramayı Filtrele:",
+            ("Tümünü Göster", "🔥 52W Dibe En Yakın Olanlar (Potansiyel Dip)", "🚀 Katı Sinyal: GÜÇLÜ AL Verenler"),
+            horizontal=True
+        )
+        
+        # Filtreleme Mantığı
+        df_filtered = df_general.copy()
+        
+        if filter_option == "🔥 52W Dibe En Yakın Olanlar (Potansiyel Dip)":
+            # Dibe %15'ten daha yakın olanları getirip yakınlığa göre sıralar
+            df_filtered = df_filtered[df_filtered["52W Dip Farkı (%)"] <= 15.0]
+            df_filtered = df_filtered.sort_values(by="52W Dip Farkı (%)", ascending=True)
+            
+        elif filter_option == "🚀 Katı Sinyal: GÜÇLÜ AL Verenler":
+            # Sadece 'GÜÇLÜ AL 🔥' sinyali verenleri filtrele
+            df_filtered = df_filtered[df_filtered["Teknik Sinyal"] == "GÜÇLÜ AL 🔥"]
+            df_filtered = df_filtered.sort_values(by="TV_Rec", ascending=False)
+            
+        # Görsel Formatlamalar
+        df_filtered["Fiyat ($)"] = df_filtered["Fiyat ($)"].apply(lambda x: f"${x:.2f}" if pd.notnull(x) else "-")
+        df_filtered["52W Dip Farkı (%)"] = df_filtered["52W Dip Farkı (%)"].apply(lambda x: f"%{x:.2f}")
+        
+        # Ekrana Bas (TV_Rec gibi backend kolonlarını gizleyerek)
+        st.dataframe(df_filtered.drop(columns=["TV_Rec"]), use_container_width=True, hide_index=True)
+        
+        if filter_option == "🔥 52W Dibe En Yakın Olanlar (Potansiyel Dip)":
+            st.info("💡 İpucu: Dibe yakın hisseler destek bölgelerinde olabilir, ancak hacim ve formasyon teyidi için Tab-2'den grafiğini incelemelisin.")
+    else:
+        st.error("Veri çekilemedi. API limitine takılmış olabilirsiniz, lütfen biraz bekleyip tekrar deneyin.")
