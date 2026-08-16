@@ -129,75 +129,90 @@ def fetch_core_earnings(terminal_ui):
     return pd.DataFrame()
 
 def get_pre_earnings_alpha(ticker):
-    """Bilanço öncesi hissenin teknik, hacim, temel ve squeeze analizini 100 üzerinden skorlar."""
+    """Bilanço öncesi hissenin teknik, hacim, temel ve squeeze analizini 100 üzerinden skorlar. (HATA KORUMALI)"""
     try:
         yf_ticker = ticker.replace('.', '-')
-        stock = yf.Ticker(yf_ticker)
-        hist = stock.history(period="3mo", progress=False)
+        hist = yf.download(yf_ticker, period="3mo", progress=False)
         
-        if hist is None or hist.empty or len(hist) < 50:
-            return "Veri Yetersiz", 0, {}
+        # Veri seti 35 günden az ise MACD ve SMA50 çöker. Minimum uzunluk kontrolü eklendi.
+        if hist is None or hist.empty or len(hist) < 35:
+            return "Veri Yetersiz", 0, {"Sistem Mesajı": "İndikatörleri hesaplamak için yeterli fiyat geçmişi bulunamadı."}
             
         closes = hist['Close'].squeeze()
         volumes = hist['Volume'].squeeze()
-        
-        rsi_14 = ta.rsi(closes, length=14).iloc[-1]
-        sma_20 = ta.sma(closes, length=20).iloc[-1]
-        sma_50 = ta.sma(closes, length=50).iloc[-1]
-        macd = ta.macd(closes)
-        macd_line = macd['MACD_12_26_9'].iloc[-1]
-        macd_signal = macd['MACDs_12_26_9'].iloc[-1]
-        
-        price_now = closes.iloc[-1]
-        
-        vol_10d = np.mean(volumes.iloc[-10:])
-        vol_30d_prev = np.mean(volumes.iloc[-40:-10])
-        vol_ratio = (vol_10d / vol_30d_prev) if vol_30d_prev > 0 else 1
+        price_now = float(closes.iloc[-1])
         
         score = 0
         details = {}
         
         # 1. Hacim Anomalisi (20 Puan)
-        if vol_ratio >= 1.5:
-            score += 20
-            details["Hacim Gücü"] = f"🟢 Kusursuz Gizli Toplama ({vol_ratio:.1f}x Artış)"
-        elif vol_ratio >= 1.2:
-            score += 10
-            details["Hacim Gücü"] = f"🟡 Standart Artış ({vol_ratio:.1f}x)"
-        else:
-            details["Hacim Gücü"] = f"🔴 İlgi Düşük ({vol_ratio:.1f}x)"
+        try:
+            vol_10d = float(np.mean(volumes.iloc[-10:]))
+            vol_30d_prev = float(np.mean(volumes.iloc[-40:-10])) if len(volumes) >= 40 else float(np.mean(volumes.iloc[-30:-10]))
+            vol_ratio = (vol_10d / vol_30d_prev) if vol_30d_prev > 0 else 1
+            
+            if vol_ratio >= 1.5:
+                score += 20
+                details["Hacim Gücü"] = f"🟢 Kusursuz Gizli Toplama ({vol_ratio:.1f}x Artış)"
+            elif vol_ratio >= 1.2:
+                score += 10
+                details["Hacim Gücü"] = f"🟡 Standart Artış ({vol_ratio:.1f}x)"
+            else:
+                details["Hacim Gücü"] = f"🔴 İlgi Düşük ({vol_ratio:.1f}x)"
+        except:
+            details["Hacim Gücü"] = "⚪ Hesaplanamadı"
             
         # 2. RSI Momentum (15 Puan)
-        if 50 <= rsi_14 <= 70:
-            score += 15
-            details["İvme (RSI)"] = f"🟢 İdeal Momentum ({rsi_14:.1f})"
-        elif rsi_14 > 70:
-            score -= 10 # Ceza puanı
-            details["İvme (RSI)"] = f"🔴 Aşırı Alım - Fiyatlanmış ({rsi_14:.1f})"
-        else:
-            details["İvme (RSI)"] = f"🟡 Zayıf Momentum ({rsi_14:.1f})"
+        try:
+            rsi_14 = float(ta.rsi(closes, length=14).iloc[-1])
+            if 50 <= rsi_14 <= 70:
+                score += 15
+                details["İvme (RSI)"] = f"🟢 İdeal Momentum ({rsi_14:.1f})"
+            elif rsi_14 > 70:
+                score -= 10
+                details["İvme (RSI)"] = f"🔴 Aşırı Alım - Fiyatlanmış ({rsi_14:.1f})"
+            else:
+                details["İvme (RSI)"] = f"🟡 Zayıf Momentum ({rsi_14:.1f})"
+        except:
+            details["İvme (RSI)"] = "⚪ Hesaplanamadı"
             
         # 3. Trend Onayı (15 Puan)
-        if price_now > sma_20 > sma_50:
-            score += 15
-            details["Trend"] = "🟢 Güçlü Yükseliş Onayı (Fiyat > SMA20 > SMA50)"
-        elif price_now > sma_20:
-            score += 5
-            details["Trend"] = "🟡 Erken Toparlanma Sinyali"
-        else:
-            details["Trend"] = "🔴 Düşüş Trendi"
+        try:
+            sma_20 = float(ta.sma(closes, length=20).iloc[-1])
+            sma_50 = float(ta.sma(closes, length=50).iloc[-1]) if len(closes) >= 50 else price_now - 1 # Veri yetersizse bypass
+            if price_now > sma_20 > sma_50 and len(closes) >= 50:
+                score += 15
+                details["Trend"] = "🟢 Güçlü Yükseliş Onayı (Fiyat > SMA20 > SMA50)"
+            elif price_now > sma_20:
+                score += 5
+                details["Trend"] = "🟡 Erken Toparlanma Sinyali (Fiyat > SMA20)"
+            else:
+                details["Trend"] = "🔴 Düşüş Trendi Teyitli"
+        except:
+            details["Trend"] = "⚪ Hesaplanamadı"
             
         # 4. MACD Kesişimi (10 Puan)
-        if macd_line > macd_signal:
-            score += 10
-            details["MACD"] = "🟢 Pozitif Kesişim"
-        else:
-            details["MACD"] = "🔴 Negatif Baskı Altında"
+        try:
+            macd = ta.macd(closes)
+            if macd is not None and not macd.empty:
+                macd_line = float(macd.iloc[:, 0].iloc[-1])
+                macd_signal = float(macd.iloc[:, 2].iloc[-1])
+                if macd_line > macd_signal:
+                    score += 10
+                    details["MACD"] = "🟢 Pozitif Kesişim"
+                else:
+                    details["MACD"] = "🔴 Negatif Baskı Altında"
+            else:
+                details["MACD"] = "⚪ Veri Yetersiz"
+        except:
+            details["MACD"] = "⚪ Hesaplanamadı"
             
-        # 5. Temel İskonto Hedefi (15 Puan)
+        # 5. Temel İskonto Hedefi (15 Puan) - Finnhub üzerinden güvenli API çekimi
         target_mean = None
         try:
-            target_mean = stock.info.get('targetMeanPrice')
+            pt_url = f"https://finnhub.io/api/v1/stock/price-target?symbol={ticker}&token={FINNHUB_API_KEY}"
+            pt_data = requests.get(pt_url, timeout=5).json()
+            target_mean = pt_data.get('targetMean')
         except: pass
         
         if target_mean and target_mean > price_now:
@@ -211,24 +226,24 @@ def get_pre_earnings_alpha(ticker):
             else:
                 details["İskonto Oranı"] = f"🔴 Hedefe Ulaşmış (+%{upside:.1f})"
         else:
-            details["İskonto Oranı"] = "⚪ Analist Verisi Yetersiz/Düşüş"
+            details["İskonto Oranı"] = "⚪ Analist Verisi Yetersiz"
             
         # 6. Short Squeeze Yakıtı (10 Puan)
         short_pct = 0
         try:
-            info_short = stock.info.get('shortPercentOfFloat', 0)
-            if info_short is not None:
-                short_pct = info_short * 100
+            stock_info = yf.Ticker(yf_ticker).info
+            if 'shortPercentOfFloat' in stock_info and stock_info['shortPercentOfFloat'] is not None:
+                short_pct = stock_info['shortPercentOfFloat'] * 100
         except: pass
         
         if short_pct > 10:
             score += 10
-            details["Squeeze Yakıtı (Açığa Satış)"] = f"🟢 Çok Yüksek (%{short_pct:.1f} Short)"
+            details["Squeeze Yakıtı"] = f"🟢 Çok Yüksek (%{short_pct:.1f} Short)"
         elif short_pct > 5:
             score += 5
-            details["Squeeze Yakıtı (Açığa Satış)"] = f"🟡 Orta Seviye (%{short_pct:.1f} Short)"
+            details["Squeeze Yakıtı"] = f"🟡 Orta Seviye (%{short_pct:.1f} Short)"
         else:
-            details["Squeeze Yakıtı (Açığa Satış)"] = f"⚪ Düşük Risk (%{short_pct:.1f} Short)"
+            details["Squeeze Yakıtı"] = f"⚪ Düşük Risk (%{short_pct:.1f} Short) veya Veri Yok"
 
         # 7. Tarihsel Bilanço Başarısı (15 Puan)
         beat_count = 0
@@ -266,7 +281,7 @@ def get_pre_earnings_alpha(ticker):
         return karar, score, details
         
     except Exception as e:
-        return f"Hata", 0, {}
+        return f"Sistem Uyarısı", 0, {"Hata Türü": "Grafik verileri API'den indirilirken zaman aşımı yaşandı veya hisse tahtası işleme kapalı."}
 
 def fetch_finnhub_analysis(ticker):
     try:
@@ -644,7 +659,7 @@ with tab1:
     if "core_df" in st.session_state and not st.session_state.core_df.empty:
         df_core = st.session_state.core_df
         c1, c2, c3 = st.columns(3)
-        c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
+        c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse (Top 25)</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
         
         valid_eps = pd.to_numeric(df_core["Est. EPS"], errors='coerce')
         avg_eps = valid_eps.mean() if not valid_eps.isna().all() else 0.0
