@@ -237,8 +237,11 @@ with tab2:
             fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['SMA_20'].squeeze(), line=dict(color='orange', width=1.5), name='SMA 20'), row=1, col=1)
             fig.add_trace(go.Scatter(x=hist_data.index, y=hist_data['SMA_50'].squeeze(), line=dict(color='blue', width=1.5), name='SMA 50'), row=1, col=1)
             
-            # Hacim
-            colors = ['red' if row['Open'] > row['Close'] else 'green' for index, row in hist_data.iterrows()]
+            # Hacim (Vektörel ve güvenli eşleştirme)
+            hist_open = hist_data['Open'].squeeze().tolist()
+            hist_close = hist_data['Close'].squeeze().tolist()
+            colors = ['red' if o > c else 'green' for o, c in zip(hist_open, hist_close)]
+            
             fig.add_trace(go.Bar(x=hist_data.index, y=hist_data['Volume'].squeeze(), marker_color=colors, name='Hacim'), row=2, col=1)
             
             fig.update_layout(height=600, template="plotly_dark", showlegend=True, margin=dict(l=0, r=0, t=40, b=0), xaxis_rangeslider_visible=False)
