@@ -113,7 +113,7 @@ def fetch_core_earnings():
     except:
         return pd.DataFrame()
 
-# --- 4. KURUMSAL PİYASA TARAYICISI (NATIVE ABD HİSSELERİ) ---
+# --- 4. KURUMSAL PİYASA TARAYICISI (NATIVE ABD HİSSELERİ - HATASI GİDERİLDİ) ---
 @st.cache_data(ttl=1800)
 def fetch_institutional_screener():
     url = "https://scanner.tradingview.com/america/scan"
@@ -136,10 +136,17 @@ def fetch_institutional_screener():
             for item in data:
                 sym = item['s'].split(':')[-1]
                 d = item['d']
-                close, low52, high52, rec, mcap, target_mean, vol = d[0:7]
                 
-                dip_farki = ((close - low52) / low52) * 100 if close and low52 and low52 > 0 else 0
-                target_pot = ((target_mean - close) / close) * 100 if target_mean and close and close > 0 else 0
+                # SESSİZ ÇÖKME BURADA ÇÖZÜLDÜ: Güvenli Tip Dönüşümü (Safe Casting)
+                close = float(d[1]) if len(d) > 1 and d[1] is not None else 0.0
+                low52 = float(d[2]) if len(d) > 2 and d[2] is not None else 0.0
+                rec = d[4] if len(d) > 4 else 0
+                mcap = d[5] if len(d) > 5 else 0
+                target_mean = float(d[6]) if len(d) > 6 and d[6] is not None else 0.0
+                vol = d[7] if len(d) > 7 else 0
+                
+                dip_farki = ((close - low52) / low52) * 100 if low52 > 0 else 0
+                target_pot = ((target_mean - close) / close) * 100 if close > 0 else 0
                 
                 parsed.append({
                     "Ticker": sym, "Price": close, "Dip_Fark_Pct": dip_farki, 
@@ -148,7 +155,7 @@ def fetch_institutional_screener():
                 })
             return pd.DataFrame(parsed)
         return pd.DataFrame()
-    except:
+    except Exception as e:
         return pd.DataFrame()
 
 # --- UI ANA İSKELET ---
