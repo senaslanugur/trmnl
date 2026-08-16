@@ -138,7 +138,6 @@ def fetch_general_screener(limit=5000):
         "filter": [{"left": "type", "operation": "in_range", "right": ["stock", "dr"]}],
         "options": {"lang": "en"},
         "markets": ["america"],
-        # Tam olarak 8 kolon isteniyor
         "columns": ["name", "close", "price_52_week_low", "price_52_week_high", "Recommend.All", "market_cap_basic", "price_target_price_mean", "volume"],
         "sort": {"sortBy": "market_cap_basic", "sortOrder": "desc"},
         "range": [0, limit]
@@ -153,7 +152,6 @@ def fetch_general_screener(limit=5000):
                 sym = item['s'].split(':')[-1]
                 d = item['d']
                 
-                # Doğru değişken eşleştirmesi (Array Indexing düzeltildi)
                 name = d[0]
                 close = d[1]
                 low52 = d[2]
@@ -186,7 +184,6 @@ def fetch_general_screener(limit=5000):
             return pd.DataFrame(parsed)
         return pd.DataFrame()
     except Exception as e:
-        # Hata ayıklamayı kolaylaştırmak için loglanabilir
         print(f"Genel Tarayıcı Hatası: {e}")
         return pd.DataFrame()
 
@@ -387,10 +384,12 @@ with tab5:
                     results.append({"Hisse": row['Hisse'], "Detay": f"Ort. Analist Hedefine Potansiyel: +%{row['Hedef Potansiyeli (%)']:.1f}", "Renk": "#ec4899"})
                     
             elif scan_type == "🐋 Balina Alımları (Insider)":
-                # Yahoo Finance ile derin analiz (Sistemin kilitlenmemesi için sadece teknik olarak sağlam veya hacimli olan ilk 50 hisse taranır)
+                # Yahoo Finance ile derin analiz
                 status_text.text("Yahoo Finance üzerinden Insider işlemleri analiz ediliyor...")
                 top_volume = tv_data.sort_values(by="Hacim", ascending=False).head(50)
-                for i, row in top_volume.iterrows():
+                
+                # BUG FIX: enumerate kullanılarak güvenli döngü sayacı oluşturuldu
+                for count, (idx, row) in enumerate(top_volume.iterrows()):
                     sym = row['Hisse']
                     try:
                         ticker = yf.Ticker(sym)
@@ -401,7 +400,8 @@ with tab5:
                                 results.append({"Hisse": sym, "Detay": f"Güçlü İçeriden Alım Sinyali Tespit Edildi", "Renk": "#06b6d4"})
                     except:
                         pass
-                    progress_bar.progress((i + 1) / 50)
+                    # Artık indeks (idx) değil, ardışık sayaç (count) kullanılarak güvenli ilerleme sağlanıyor
+                    progress_bar.progress((count + 1) / len(top_volume))
                     
             elif scan_type == "🔥 Altın Kesişim (Dip + Güçlü Sinyal)":
                 filtered = tv_data[(tv_data['52W Dip Farkı (%)'] > 0) & (tv_data['52W Dip Farkı (%)'] <= 20.0) & (tv_data['Teknik Sinyal'] == "GÜÇLÜ AL 🔥")]
