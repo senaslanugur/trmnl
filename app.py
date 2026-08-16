@@ -78,27 +78,27 @@ def get_nlp_engine():
 def fetch_core_earnings(terminal_ui):
     terminal_ui.code("[*] TradingView Kazanç Takvimi API'sine bağlanılıyor...\n", language="bash")
     time.sleep(0.5)
-    url = "https://scanner.tradingview.com/america/scan"
+    url = "https://scanner.tradingview.com/america/scan?label-product=calendar-earnings"
     now = int(time.time())
     one_month_later = now + (30 * 24 * 60 * 60)
     
     payload = {
         "filter": [
-            {"left": "earnings_release_next_date", "operation": "in_range", "right": [now, one_month_later]}, 
-            {"left": "earnings_per_share_forecast_next_fq", "operation": "greater", "right": 0}
+            {"left": "earnings_release_next_date", "operation": "in_range", "right": [now, one_month_later]}
+            # EPS > 0 KISITLAMASI KALDIRILDI!
         ],
         "markets": ["america"],
-        # Analist hedefini arka planda çekiyoruz
-        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic", "price_target_price_mean"],
+        "columns": ["name", "earnings_per_share_forecast_next_fq", "earnings_release_next_date", "market_cap_basic"],
         "sort": {"sortBy": "earnings_release_next_date", "sortOrder": "asc"},
         "range": [0, 5000] 
     }
     
     try:
         resp = requests.post(url, json=payload)
-        terminal_ui.code(f"[*] Sunucu Yanıtı: {resp.status_code}\n[*] Veriler işleniyor...\n", language="bash")
         if resp.status_code == 200:
             data = resp.json().get('data', [])
+            terminal_ui.code(f"[*] TradingView'dan {len(data)} hisse alındı.\n[*] Orijinal sıralama algoritması uygulanıyor...\n", language="bash")
+            
             def sort_key(x):
                 d = x['d']
                 ts = d[2]
@@ -114,22 +114,22 @@ def fetch_core_earnings(terminal_ui):
                 d = item['d']
                 val = d[3] or 0
                 m_cap_str = f"${val/1e9:.2f}B" if val >= 1e9 else (f"${val/1e6:.2f}M" if val >= 1e6 else f"${val:.2f}")
+                eps_val = d[1] if d[1] is not None else "Belirsiz"
                 
                 parsed.append({
                     "Hisse": sym, 
-                    "Est. EPS": d[1],
+                    "Est. EPS": eps_val,
                     "Market Cap": m_cap_str,
-                    "Tarih": time.strftime('%d-%m-%Y', time.localtime(d[2])),
-                    "Target_Mean": d[4] if len(d) > 4 and d[4] else 0
+                    "Tarih": time.strftime('%d-%m-%Y', time.localtime(d[2]))
                 })
                 
-            terminal_ui.code(f"\n[+] İşlem Başarılı! {len(parsed)} hisselik Çekirdek Liste hazır.\n", language="bash")
+            terminal_ui.code(f"\n[+] İşlem Başarılı! Çekirdek liste hazır.\n", language="bash")
             return pd.DataFrame(parsed)
     except Exception as e: 
         terminal_ui.code(f"[!] HATA OLUŞTU: {e}\n", language="bash")
     return pd.DataFrame()
 
-def get_pre_earnings_alpha(ticker, target_mean):
+def get_pre_earnings_alpha(ticker):
     """Bilanço öncesi hissenin teknik ve hacim analizini 100 üzerinden skorlar."""
     try:
         yf_ticker = ticker.replace('.', '-')
@@ -141,7 +141,6 @@ def get_pre_earnings_alpha(ticker, target_mean):
         closes = hist['Close'].squeeze()
         volumes = hist['Volume'].squeeze()
         
-        # İndikatör Hesaplamaları
         rsi_14 = ta.rsi(closes, length=14).iloc[-1]
         sma_20 = ta.sma(closes, length=20).iloc[-1]
         sma_50 = ta.sma(closes, length=50).iloc[-1]
@@ -158,19 +157,17 @@ def get_pre_earnings_alpha(ticker, target_mean):
         score = 0
         details = {}
         
-        # 1. Hacim Puanı (25 Puan)
         if vol_ratio >= 1.5:
-            score += 25
+            score += 30
             details["Hacim Gücü"] = f"🟢 Kusursuz Gizli Toplama ({vol_ratio:.1f}x Artış)"
         elif vol_ratio >= 1.2:
-            score += 10
+            score += 15
             details["Hacim Gücü"] = f"🟡 Standart Artış ({vol_ratio:.1f}x)"
         else:
             details["Hacim Gücü"] = f"🔴 İlgi Düşük ({vol_ratio:.1f}x)"
             
-        # 2. RSI Momentum (20 Puan)
         if 50 <= rsi_14 <= 70:
-            score += 20
+            score += 25
             details["İvme (RSI)"] = f"🟢 İdeal Momentum ({rsi_14:.1f})"
         elif rsi_14 > 70:
             score -= 10
@@ -178,9 +175,8 @@ def get_pre_earnings_alpha(ticker, target_mean):
         else:
             details["İvme (RSI)"] = f"🟡 Zayıf Momentum ({rsi_14:.1f})"
             
-        # 3. Trend Yönü (20 Puan)
         if price_now > sma_20 > sma_50:
-            score += 20
+            score += 25
             details["Trend"] = "🟢 Güçlü Yükseliş Onayı (Fiyat > SMA20 > SMA50)"
         elif price_now > sma_20:
             score += 10
@@ -188,28 +184,12 @@ def get_pre_earnings_alpha(ticker, target_mean):
         else:
             details["Trend"] = "🔴 Düşüş Trendi Teyitli"
             
-        # 4. MACD Kesişimi (15 Puan)
         if macd_line > macd_signal:
-            score += 15
+            score += 20
             details["MACD"] = "🟢 Pozitif Kesişim (Boğa Tarafında)"
         else:
             details["MACD"] = "🔴 Negatif Baskı Altında"
             
-        # 5. Temel İskonto (20 Puan)
-        if target_mean and target_mean > price_now:
-            upside = ((target_mean - price_now) / price_now) * 100
-            if upside >= 15:
-                score += 20
-                details["İskonto Oranı"] = f"🟢 Yüksek Potansiyel (+%{upside:.1f})"
-            elif upside >= 5:
-                score += 10
-                details["İskonto Oranı"] = f"🟡 Sınırlı Potansiyel (+%{upside:.1f})"
-            else:
-                details["İskonto Oranı"] = f"🔴 Hedefe Ulaşmış (+%{upside:.1f})"
-        else:
-            details["İskonto Oranı"] = "⚪ Analist Verisi Yetersiz"
-            
-        # Nihai Karar
         if score >= 80:
             karar = f"🔥 KUSURSUZ ALIM"
         elif score >= 60:
@@ -603,11 +583,14 @@ with tab1:
         df_core = st.session_state.core_df
         c1, c2, c3 = st.columns(3)
         c1.markdown(f"<div class='quant-card'><div class='quant-card-title'>Taranan Hisse</div><div class='quant-card-value'>{len(df_core)}</div></div>", unsafe_allow_html=True)
-        avg_eps = pd.to_numeric(df_core["Est. EPS"], errors='coerce').mean()
+        
+        valid_eps = pd.to_numeric(df_core["Est. EPS"], errors='coerce')
+        avg_eps = valid_eps.mean() if not valid_eps.isna().all() else 0.0
+        
         c2.markdown(f"<div class='quant-card'><div class='quant-card-title'>Ortalama Est. EPS</div><div class='quant-card-value'>${avg_eps:.2f}</div></div>", unsafe_allow_html=True)
         c3.markdown(f"<div class='quant-card'><div class='quant-card-title'>Tarih Aralığı</div><div class='quant-card-value'>Gelecek 30 Gün</div></div>", unsafe_allow_html=True)
         
-        st.dataframe(df_core.drop(columns=["Target_Mean"]), use_container_width=True, hide_index=True)
+        st.dataframe(df_core, use_container_width=True, hide_index=True)
         
         st.write("---")
         st.markdown("### 🐋 Finnhub Derin Analiz & Pre-Earnings Alpha")
@@ -618,10 +601,7 @@ with tab1:
             with st.spinner(f"{selected_ticker} için Alpha Skor ve Temel veriler çekiliyor..."):
                 curr_price, low_52, high_52, recs_data, balina = fetch_finnhub_analysis(selected_ticker)
                 analyst_df = fetch_analyst_institutions(selected_ticker)
-                target_mean_val = df_core[df_core["Hisse"] == selected_ticker].iloc[0].get("Target_Mean", 0)
-                
-                # Yeni Alpha Algoritması Çağrılıyor
-                alpha_karar, alpha_score, alpha_details = get_pre_earnings_alpha(selected_ticker, target_mean_val)
+                alpha_karar, alpha_score, alpha_details = get_pre_earnings_alpha(selected_ticker)
                 
             st.markdown(f"#### ⚙️ Pre-Earnings Alpha Skoru")
             st.markdown(f"**Nihai Karar:** {alpha_karar}")
